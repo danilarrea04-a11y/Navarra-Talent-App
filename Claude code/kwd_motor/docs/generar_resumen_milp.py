@@ -60,7 +60,7 @@ def B(items):
 
 def diagrama(ruta):
     cajas = ["1 Entradas", "2 Horizonte\n24 franjas", "3 Variables\nde decisión", "4 Reglas\nobligatorias",
-             "5 Objetivo\n(pesos KWD)", "6 Resolución\nHiGHS", "7 Top 1/2/3\n+ referencia", "8 Validación\ny explicación"]
+             "5 Objetivo\n(pesos KWD)", "6 Resolución\nHiGHS", "7 Top 1/2/3\npor cortes", "8 Validación\ny explicación"]
     fig, ax = plt.subplots(figsize=(7.4, 2.15))
     ax.set_xlim(0, 4.3)
     ax.set_ylim(0, 2.3)
@@ -78,8 +78,8 @@ def diagrama(ruta):
         ax.add_patch(FancyArrowPatch((pos[i + 4][0] + 0.92, 0.76), (pos[i + 5][0] - 0.02, 0.76), **kw))
     ax.add_patch(FancyArrowPatch((pos[3][0] + 0.45, 1.43), (pos[4][0] + 0.45, 1.09), connectionstyle="arc3,rad=0",
                                  **kw))
-    ax.text(2.15, 0.12, "9 Reconfiguración: ante una incidencia se vuelve al paso 1 con el stock actual y se "
-            "recalculan las 24 h siguientes", ha="center", fontsize=7.4, color=NAVY_HEX, style="italic")
+    ax.text(2.15, 0.12, "9 Contingencia (a petición): se dan de baja células y personas y se recalcula "
+            "desde el stock actual", ha="center", fontsize=7.4, color=NAVY_HEX, style="italic")
     fig.savefig(ruta, dpi=200, bbox_inches="tight", pad_inches=0.03)
     plt.close(fig)
 
@@ -119,73 +119,72 @@ def main():
           Image(str(tmp), width=17.2 * cm, height=17.2 * cm * 0.30)]
     el[-1].drawHeight = 17.2 * cm * Image(str(tmp)).imageHeight / Image(str(tmp)).imageWidth
 
-    el += [P("1. Entradas", "h2"),
-           P("El motor parte de los datos reales de la planta:")] + B([
-        "<b>Demanda</b> semanal por pieza, con corrección diaria si cambia el pedido.",
-        "<b>Stock</b> actual de cada pieza y <b>recursos reales</b> disponibles por turno.",
-        "Células de <b>alta o baja</b>, <b>mantenimientos</b> programados y <b>cargas de camiones</b> (qué sale y cuándo)."])
+    el += [P("1. Entradas (se introducen en la app, sin Excel)", "h2")] + B([
+        "<b>Demanda semanal</b> por tipo de pieza y <b>demanda diaria corregida</b>; si un día no tiene corrección "
+        "se usa la semanal / 5.",
+        "<b>Bajas de personal</b> por turno y rol, <b>paradas programadas</b> (p. ej. técnicos de una célula) y "
+        "<b>stock actual</b> de cada pieza.",
+        "Las constantes de la planta (células, turnos estándar, almacén) están fijas en el programa."])
 
     el += [P("2. Horizonte de 24 franjas horarias", "h2"),
-           P("Se mira el futuro inmediato hora a hora. A cada una de las 24 horas se le asigna: su <b>turno</b>; "
-             "los <b>recursos disponibles</b> (estándar del turno menos un 5 % de absentismo, o los reales si se "
-             "han informado); las <b>células bloqueadas</b> (baja o mantenimiento); los <b>camiones que salen</b> y "
-             "su carga; y un <b>factor energético</b>: 0,85 en la franja solar (11-17 h), 1,2 de noche (22-06 h) y "
-             "1 el resto.")]
+           P("Se mira el futuro inmediato hora a hora. A cada hora se le asigna su <b>turno</b>, el <b>personal "
+             "presente</b> por rol (estándar menos bajas), las <b>células bloqueadas</b> por parada, los "
+             "<b>camiones</b> (cada 1,5 h, tantos de 15 m² como hagan falta) y un <b>factor energético</b>: más "
+             "barato en la franja solar (11-14 h) y más caro de noche.")]
 
     el += [P("3. Qué decide el modelo", "h2"),
-           P("Para <b>cada célula y cada hora</b> el modelo elige dos cosas: si está <b>activa</b> (sí/no, una "
-             "variable binaria) y <b>qué fracción de la hora produce</b> (un número entre 0 y 1). Una célula sólo "
-             "puede producir si está activa. El modelo de demostración tiene unas 2.200 variables (384 binarias) "
-             "y unas 2.000 restricciones, y se resuelve en segundos.")]
+           P("Para <b>cada célula y cada hora</b>: si está <b>activa</b> (sí/no) y <b>qué fracción de la hora "
+             "produce</b> (entre 0 y 1). Además, para cada rol (operarios, picking, carretilleros, mantenimiento, "
+             "calidad) decide el <b>número entero de personas</b> asignadas. Después los trabajadores concretos se "
+             "enumeran y se asignan <b>puesto a puesto</b>: cada persona presente queda asignada o libre.")]
 
-    el += [P("4. Reglas obligatorias", "h2"),
-           P("Son las condiciones del problema. Si una sola se incumple, el plan se descarta (en el modelo, "
-             "romperlas tiene una penalización enorme que lo marca como inviable):")] + B([
-        "<b>Célula 10</b> (logística) siempre activa en horas laborables; <b>células 11 y 12</b> siempre juntas.",
-        "Células de <b>baja o mantenimiento</b> apagadas.",
-        "<b>Operarios, picking, carretilleros, mantenimiento y calidad</b> nunca por encima de lo disponible en esa hora.",
-        "<b>Stock de cada pieza ≥ stock de seguridad</b> (400 piezas VE / 200 piezas COMB) en todas las horas.",
-        "<b>Almacén de producto terminado ≤ 800 m²</b>."]) + [
-        P("Y la contabilidad del stock, que enlaza una hora con la siguiente:"),
-        P("stock<sub>h</sub> = stock<sub>h-1</sub> + producción<sub>h</sub> − salidas de camiones<sub>h</sub>", "f")]
+    el += [P("4. Reglas obligatorias", "h2")] + B([
+        "<b>Célula 10</b> siempre activa; <b>células 11 y 12</b> siempre juntas.",
+        "<b>Personal asignado ≤ personal presente</b> en cada rol y hora; células en parada, apagadas.",
+        "<b>Almacén de producto terminado ≤ 800 m²</b>.",
+        "<b>Balance de stock</b> con los camiones cada 1,5 h:"]) + [
+        P("stock<sub>h</sub> = stock<sub>h-1</sub> + producción<sub>h</sub> − salida de camiones<sub>h</sub>", "f"),
+        P("Jerarquía de penalizaciones: <b>pedido no servido</b> (el plan se marca CRÍTICO y se avisa a "
+          "dirección) <b>≫ stock por debajo del de seguridad (SS)</b> (se repone primero) <b>≫ criterios</b>. "
+          "Solo el almacén > 800 m² o las reglas de células hacen inviable un plan.")]
 
-    el += [P("5. Qué busca (función objetivo)", "h2"),
-           P("Entre todos los planes que cumplen las reglas, busca el que <b>minimiza</b> una suma ponderada con "
-             "los pesos del cliente (KWD):")] + [caja_pesos()] + [
-        P("Cada criterio se normaliza entre 0 y 1 (0 = ideal), y la puntuación final es:"),
+    el += [P("5. Qué busca (criterios con pesos KWD)", "h2"),
+           P("Entre los planes posibles minimiza una suma ponderada de criterios normalizados (0 = ideal):")] + [
+        caja_pesos()] + [
         P("Puntuación = 100 × (1 − Σ peso<sub>i</sub> × criterio<sub>i</sub>)", "f"),
-        P("Se añaden dos términos auxiliares muy pequeños: una penalización <b>blanda</b> si el stock final no "
-          "alcanza para las <b>8 h siguientes</b> (evita \"dejar la casa vacía\" al cierre del horizonte) y una "
-          "mínima penalización por cada <b>arranque/parada</b> innecesario (planes más estables).")]
+        P("El <b>tiempo muerto real</b> es el personal presente menos el trabajo productivo, y el trabajo "
+          "productivo cuenta solo la fracción de la hora en que la célula produce. El <b>stock óptimo</b> es el "
+          "SS más la demanda de un turno, y se mide al cierre de cada turno (06, 14 y 22 h).")]
 
     el += [P("6. Resolución", "h2"),
-           P("El solver <b>HiGHS</b> explora las combinaciones y devuelve la mejor demostrando que ninguna otra "
-             "puede ser mejor salvo un margen del <b>0,1 %</b>; esa garantía es la <b>idoneidad</b> de la solución. "
-             "Si <b>no existe ninguna solución que cumpla todo</b>, no se inventa nada: se devuelve un "
-             "<b>plan de contingencia</b> indicando exactamente qué regla se incumple y dónde.")]
+           P("El solver <b>HiGHS</b> dispone de <b>8 s por plan</b>. La <b>idoneidad</b> = 100 · (1 − gap) indica "
+             "lo cerca que está el plan del mejor posible, y se informa también la <b>puntuación máxima "
+             "alcanzable</b>. Si no existe un plan que cumpla las reglas duras, no se inventa nada: se explica qué "
+             "regla falla.")]
 
-    el += [P("7. Top 1/2/3 y comparación con el plan manual", "h2"),
-           P("Para ofrecer alternativas reales, tras obtener el mejor plan se <b>prohíbe la configuración de "
-             "células del turno actual</b> que acaba de ganar y se <b>vuelve a resolver</b>; así se obtienen el "
-             "Top 2 y el Top 3, ordenados por puntuación. Además, se calcula un <b>plan manual de referencia</b> "
-             "(regla sencilla de planificador, que mira 8 h adelante) y se mide el impacto frente a él en "
-             "<b>horas-operario, m² de almacén y kWh</b>.")]
+    el += [P("7. Top 1/2/3", "h2"),
+           P("Tras el mejor plan se <b>prohíbe (corte) la configuración de células</b> que acaba de ganar y se "
+             "vuelve a resolver, obteniendo el Top 2 y el Top 3, <b>ordenados por puntuación</b>. Las alternativas "
+             "de baja calidad (<b>idoneidad < 50 %</b>) se descartan.")]
 
     el += [P("8. Comprobación y explicación", "h2"),
-           P("Un <b>validador independiente</b> recalcula desde cero todas las reglas sobre el plan final (no se "
-             "fía del solver). Después el programa explica en lenguaje llano <b>qué activar</b>, <b>por qué</b> "
-             "(por ejemplo, cuándo caería el stock bajo el mínimo si no se hiciera) y <b>con qué impacto</b>.")]
+           P("Un <b>validador independiente</b> recalcula todas las reglas sobre el plan final. Después se explica "
+             "en lenguaje llano <b>qué activar</b>, <b>por qué</b> y <b>con qué impacto</b>, comparando con las "
+             "alternativas Top 2/3.")]
 
-    el += [P("9. Reconfiguración (rolling horizon)", "h2"),
-           P("Ante una incidencia (avería, falta de personal, pedido urgente) se <b>fija lo ya ejecutado</b>, se "
-             "toma el <b>stock actual</b> como punto de partida y se <b>recalculan las 24 h siguientes</b> en "
-             "segundos, repitiendo los pasos 1 a 8.")]
+    el += [P("9. Contingencia (a petición)", "h2"),
+           P("Solo cuando se pulsa el botón, se indican las <b>células</b> y las <b>personas</b> dados de baja y se "
+             "recalcula el plan desde el stock actual. El plan <b>consume el stock de seguridad</b> para aguantar; "
+             "si el stock llega a agotarse, se genera un <b>aviso para dirección</b> (pieza, hora de agotamiento, "
+             "piezas no servidas). Resuelta la incidencia, <b>repone primero el SS y después recupera el stock "
+             "óptimo</b>. Se muestra la reubicación de personas, las máquinas a activar y los indicadores antes y "
+             "después.")]
 
     el += [Spacer(1, 8), KeepTogether([P("En una frase", "h2"), caja([
-        ("Qué activar", "El conjunto de células que cada hora cumple todas las reglas con la menor carga de recursos."),
-        ("Por qué", "Porque así el stock de cada pieza no cae bajo seguridad y se cubren los camiones previstos."),
-        ("Con qué impacto", "Menos horas-operario, menos m² de almacén y menos kWh que el plan manual de referencia."),
-        ("Qué tan buena es", "Puntuación sobre 100, con idoneidad demostrada: ningún plan es mejor salvo un 0,1 %.")])])]
+        ("Qué activar", "Las células y personas de cada hora que cumplen todas las reglas y ocupan al máximo al personal presente."),
+        ("Por qué", "Para servir todos los camiones sin bajar del stock de seguridad y acercarse al stock óptimo."),
+        ("Con qué impacto", "Menos tiempo muerto, menos m² de almacén y menos energía que las alternativas Top 2/3."),
+        ("Qué tan buena es", "Puntuación sobre 100 con su máximo alcanzable e idoneidad = 100 · (1 − gap).")])])]
 
     doc = BaseDocTemplate(str(SALIDA), pagesize=A4, leftMargin=1.8 * cm, rightMargin=1.8 * cm, topMargin=1.7 * cm,
                           bottomMargin=1.6 * cm, title="KWD - Lógica del MILP", author="Equipo KWD")
@@ -197,11 +196,11 @@ def main():
 
 
 def caja_pesos():
-    datos = [("50 %", "Menor ocupación de operarios, picking y carretilleros"),
+    datos = [("50 %", "<b>Tiempo muerto real</b> de todo el personal presente (objetivo principal)"),
              ("20 %", "Menos m² de almacén ocupados"),
              ("15 %", "Más margen de calidad y mantenimiento"),
-             ("10 %", "Mantener un colchón por encima del stock de seguridad"),
-             ("5 %", "Menor consumo ponderado (aprovechar la franja solar)")]
+             ("10 %", "Menor desviación respecto al stock óptimo (SS + un turno de demanda) al cierre de turno"),
+             ("5 %", "Menor coste energético (franja solar 11-14 h; la noche es más cara)")]
     t = Table([[P(f"<b>{a}</b>", "cel"), P(b, "cel")] for a, b in datos], colWidths=[1.8 * cm, 15.6 * cm])
     t.setStyle(TableStyle([("ROWBACKGROUNDS", (0, 0), (-1, -1), [ZEBRA, colors.white]),
                            ("BOX", (0, 0), (-1, -1), 0.6, NAVY), ("TOPPADDING", (0, 0), (-1, -1), 2.5),
