@@ -1,24 +1,24 @@
 {
   "demanda_semanal": [
     {
-      "semana_inicio": "2026-09-28",
+      "semana_inicio": "2026-10-05",
       "piezas_ve": 2500.0,
       "piezas_comb": 5000.0
     },
     {
-      "semana_inicio": "2026-10-05",
+      "semana_inicio": "2026-09-28",
       "piezas_ve": 2500.0,
       "piezas_comb": 5000.0
     }
   ],
   "demanda_diaria": [
     {
-      "fecha": "2026-10-02",
+      "fecha": "2026-10-05",
       "piezas_ve": 550.0,
       "piezas_comb": 950.0
     },
     {
-      "fecha": "2026-10-05",
+      "fecha": "2026-10-02",
       "piezas_ve": 550.0,
       "piezas_comb": 950.0
     }

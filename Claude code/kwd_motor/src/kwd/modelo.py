@@ -233,9 +233,6 @@ def _kpis_tramo(d, hz, plan: Plan, idx: np.ndarray, bruta: np.ndarray) -> dict:
     k["piezas_comb_a_expedir"] = cb
     k["piezas_ve_cubiertas"] = ve - min(ve, falt_ve)
     k["piezas_comb_cubiertas"] = cb - min(cb, falt_cb)
-    # alias de la v1
-    k["chasis_ve_a_expedir"], k["chasis_comb_a_expedir"] = k["piezas_ve_a_expedir"], k["piezas_comb_a_expedir"]
-    k["chasis_ve_cubiertos"], k["chasis_comb_cubiertos"] = k["piezas_ve_cubiertas"], k["piezas_comb_cubiertas"]
     k["demanda_cubierta_pct"] = (100.0 * (k["piezas_ve_cubiertas"] + k["piezas_comb_cubiertas"]) / (ve + cb)
                                  if (ve + cb) > 1e-9 else 100.0)
     n_ve, n_cb = int(d.es_ve.sum()), int((~d.es_ve).sum())
