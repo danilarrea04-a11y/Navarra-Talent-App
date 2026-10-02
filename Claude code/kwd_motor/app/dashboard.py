@@ -894,13 +894,6 @@ with T["Alternativas"]:
                       "m² medios": round(float(np.mean(p.espacio.values)), 1),
                       "kWh": round(float(np.sum(p.energia_kwh.values)), 1)})
     st.dataframe(pd.DataFrame(filas), width="stretch", hide_index=True)
-    colores = [G.VERDE if n.startswith("Top") else G.ROJO for n, _ in opciones]
-    pc(G.comparar_barras([n for n, _ in opciones], [p.puntuacion for _, p in opciones], "Índice KWD", colores),
-       width="stretch")
-    pc(G.comparar_barras([n for n, _ in opciones], [informes.horas_libres(p)["total"] for _, p in opciones],
-                         "Horas libres (menos es mejor)", colores), width="stretch")
-    pc(G.comparar_barras([n for n, _ in opciones], [float(np.sum(p.energia_kwh.values)) for _, p in opciones],
-                         "kWh totales", colores), width="stretch")
     nombres = [n for n, _ in opciones]
     todas = []
     for _, p in opciones:
@@ -1135,19 +1128,15 @@ with T["Semana"]:
             stk = sem[cols_stock].copy()
             stk.columns = [c.replace("stock_", "") for c in cols_stock]
             stk.index = etiqueta
-            largo = stk.reset_index(names="Turno").melt(id_vars="Turno", var_name="Célula", value_name="Stock")
-            largo["Tipo"] = largo["Célula"].map(lambda c: tipo_cel.get(int(c[1:]), "COMB"))
-            fig = px.line(largo, x="Turno", y="Stock", color="Célula", facet_row="Tipo", markers=True,
-                          title="Evolución del stock por pieza a lo largo de la semana")
-            fig.update_layout(height=560, margin=dict(l=10, r=10, t=50, b=10))
-            fig.update_yaxes(matches=None)
+            stk_tipo = pd.DataFrame({
+                "VE": stk[[c for c in stk.columns if tipo_cel.get(int(c[1:])) == "VE"]].sum(axis=1),
+                "COMB": stk[[c for c in stk.columns if tipo_cel.get(int(c[1:])) == "COMB"]].sum(axis=1)})
+            fig = px.line(stk_tipo, x=stk_tipo.index, y=["VE", "COMB"], markers=True,
+                          color_discrete_map={"VE": G.COLOR_TIPO.get("VE", "#2E9E5B"), "COMB": G.COLOR_TIPO.get("COMB", NAVY)},
+                          labels={"value": "Piezas en stock", "x": "Turno", "variable": "Tipo"},
+                          title="Stock al final de cada turno (suma de referencias)")
+            fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10))
             pc(fig, width="stretch")
             st.dataframe(stk.round(0).astype(int), width="stretch")
-        num = sem.select_dtypes("number")
-        for c in [c for c in num.columns if any(s in c.lower() for s in ("puntuacion", "puntuación", "m2", "m²", "kwh"))][:3]:
-            x = sem["turno"].astype(str) if "turno" in sem else sem.index.astype(str)
-            fig = px.bar(sem, x=x, y=c, title=c.replace("_", " ").capitalize(), color_discrete_sequence=[NAVY])
-            fig.update_layout(height=280, margin=dict(l=10, r=10, t=40, b=10))
-            pc(fig, width="stretch")
         st.download_button("Descargar tabla (CSV)", sem.to_csv(index=False).encode("utf-8-sig"),
                            file_name="simulacion_semana.csv", mime="text/csv")
