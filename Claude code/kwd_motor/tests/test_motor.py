@@ -1,4 +1,4 @@
-"""Pruebas del motor de decisión KWD v2 (pytest)."""
+"""Pruebas del motor de decisión KWD v3 (pytest)."""
 import sys
 from pathlib import Path
 
@@ -8,21 +8,20 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from kwd.config import COMPONENTES, DEFINICION_PLAN_MANUAL, FLAGS, PESO_PARAM, RECURSOS  # noqa: E402
-from kwd.datos import (cargar_entrada, crear_escenario_ejemplo, crear_plantilla_contingencia,  # noqa: E402
-                       crear_plantilla_ejemplo, demanda_desde_coches, demanda_dia, guardar_entrada,
-                       ss_por_celula, validar_ss_almacen)
+from kwd.config import COMPONENTES, PESO_PARAM, RECURSOS  # noqa: E402
+from kwd.datos import (cargar_estado, demanda_desde_coches, demanda_dia,  # noqa: E402
+                       estado_ejemplo, guardar_estado, ss_por_celula, validar_ss_almacen)
 from kwd.horizonte import construir_horizonte  # noqa: E402
 from kwd.motor import recomendar  # noqa: E402
-from kwd.rolling import (Evento, aplicar_evento, contingencia_celula, estado_en, reconfigurar,  # noqa: E402
-                         simular_semana)
+from kwd.rolling import (Evento, aplicar_evento, contingencia, contingencia_celula, estado_en,  # noqa: E402
+                         reconfigurar)
 from kwd.validador import validar  # noqa: E402
 
 INICIO = pd.Timestamp("2026-10-02 14:00")
 
 
 def _esc(tl=5):
-    esc = crear_escenario_ejemplo()
+    esc = estado_ejemplo()
     esc.parametros["tiempo_limite_s"] = tl
     return esc
 
@@ -83,8 +82,11 @@ def test_celula_10_no_se_puede_parar(esc06):
 def test_demanda_por_piezas_y_coches():
     assert demanda_desde_coches(1500) == (500.0, 1000.0)
     esc = _esc()
-    assert demanda_dia(esc, "2026-10-01") == (500.0, 1000.0)
-    assert demanda_dia(esc, "2026-10-02") == (520.0, 980.0)
+    assert demanda_dia(esc, "2026-10-01") == (500.0, 1000.0)   # semanal / 5
+    assert demanda_dia(esc, "2026-10-02") == (500.0, 1000.0)   # sin corregida: semanal / 5
+    e2 = aplicar_evento(esc, Evento("correccion_demanda", {"fecha": "2026-10-02", "piezas_ve": 520, "piezas_comb": 980}))
+    assert demanda_dia(e2, "2026-10-02") == (520.0, 980.0)     # la corregida manda
+    assert demanda_dia(e2, "2026-10-01") == (500.0, 1000.0)
     assert demanda_dia(esc, "2026-10-03") == (0.0, 0.0)
 
 
@@ -96,7 +98,7 @@ def test_camiones_15m2_y_demanda_completa(esc06):
     assert (cam["fecha_hora"].diff().dropna() == pd.Timedelta(hours=1.5)).all()
     assert (cam["m2"] / cam["n_camiones"] <= 15 + 1e-9).all()  # cada camión <= 15 m²
     assert ((cam["n_camiones"] - 1) * 15 < cam["m2"]).all()  # los justos
-    assert cam["piezas_ve"].sum() == pytest.approx(520) and cam["piezas_comb"].sum() == pytest.approx(980)
+    assert cam["piezas_ve"].sum() == pytest.approx(500) and cam["piezas_comb"].sum() == pytest.approx(1000)
     assert hz.camiones["fecha_hora"].max() == pd.Timestamp("2026-10-03 04:30")
 
 
@@ -124,23 +126,74 @@ def test_ss_consumible_con_reposicion_y_alerta():
     assert any("Stock de seguridad de la pieza" in a for a in rec.alertas)
 
 
-def test_stock_negativo_es_inviable():
-    esc = _esc(3)
+def test_pedido_no_servido_es_critico_con_aviso():
+    esc = _esc(4)
     esc.stock_actual["piezas"] = 0.0
     esc.paradas = pd.concat([esc.paradas, pd.DataFrame({"celula": [3], "desde": [pd.Timestamp("2026-10-01")],
                                                         "hasta": [pd.Timestamp("2026-10-04")], "tipo": ["AVERIA"],
                                                         "tecnicos": [0.0]})], ignore_index=True)
     rec = recomendar(esc, INICIO, top_k=1)
-    assert rec.top == [] and rec.contingencia is not None
-    assert rec.contingencia.estado == "INVIABLE" and rec.contingencia.idoneidad is None
-    assert any("pedido no servido" in m for m in rec.contingencia.incumplimientos)
-    assert any("INVIABLE" in a for a in rec.alertas)
+    assert rec.contingencia is None and rec.top
+    p = rec.mejor
+    assert p.estado == "CRITICO" and p.viable and p.idoneidad is not None
+    assert p.aviso_direccion and "Pieza 3" in p.aviso_direccion and "total" in p.aviso_direccion
+    assert rec.aviso_direccion == p.aviso_direccion
+    des = p.desabastecimiento
+    assert list(des.columns) == ["pieza", "ciclo", "piezas_no_servidas"] and (des["pieza"] == 3).any()
+    assert set(p.agotamiento["pieza"]) >= {3} and any("CRÍTICO" in a for a in rec.alertas)
+
+
+# --- horas libres (R) y stock óptimo (B) ----------------------------------------------------------
+def test_R_es_fraccion_libre_del_personal_presente(rec06):
+    p = rec06.top[0]
+    hz = rec06.horizonte
+    W = hz.slots["laborable"].to_numpy(dtype=bool)
+    disp = sum(p.recursos[f"{r}_disp"].to_numpy()[W].sum() for r in RECURSOS)
+    usado = sum(p.recursos[f"{r}_usado"].to_numpy()[W].sum() for r in RECURSOS)
+    assert p.componentes["R"] == pytest.approx((disp - usado) / disp, abs=1e-9)
+    assert p.kpis["horas_libres_total"] == pytest.approx(disp - usado)
+    assert p.kpis["horas_libres_total"] == pytest.approx(sum(p.kpis[f"horas_libres_{r}"] for r in RECURSOS))
+    assert "ocupacion_operarios_pct" in p.kpis
+    # todo el personal presente está ASIGNADO o LIBRE (sin EXCEDENTE)
+    assert "EXCEDENTE" not in set(p.personal["estado"])
+    libres = int(((p.personal["estado"] == "LIBRE")).sum())
+    assert libres == pytest.approx(p.kpis["horas_libres_total"])
+
+
+def test_B_desviacion_respecto_al_optimo_en_cierres(rec06, esc06):
+    p, hz = rec06.top[0], rec06.horizonte
+    assert hz.cierres == [7, 15, 23]  # 14:00, 22:00, 06:00 del día siguiente
+    ss = ss_por_celula(esc06)
+    for ic, c in enumerate(p.stock.columns):
+        assert hz.stock_optimo[c].iloc[0] == pytest.approx(ss[c] + (500 if c in (3, 4, 8, 9, 13, 14, 15) else 1000) / 3)
+    dev = (p.stock.loc[hz.cierres] - hz.stock_optimo).abs() / hz.stock_optimo
+    assert p.componentes["B"] == pytest.approx(float(dev.to_numpy().mean()), abs=1e-6)
+    assert len(p.stock_vs_optimo) == 3 * len(p.stock.columns)
+    assert p.kpis["stock_opt_dev_media_pct"] == pytest.approx(100 * p.componentes["B"], abs=1e-6)
+
+
+# --- estado.json ----------------------------------------------------------------------------------
+def test_estado_json_roundtrip(tmp_path):
+    esc = _esc()
+    esc = aplicar_evento(esc, Evento("correccion_demanda", {"fecha": "2026-10-01", "piezas_ve": 510, "piezas_comb": 990}))
+    ruta = tmp_path / "estado.json"
+    guardar_estado(esc, ruta)
+    e2 = cargar_estado(ruta)
+    assert demanda_dia(e2, "2026-10-01") == (510.0, 990.0) and demanda_dia(e2, "2026-10-02") == (500.0, 1000.0)
+    assert len(e2.paradas) == 1 and e2.paradas["tipo"].iloc[0] == "PROGRAMADA" and e2.paradas["tecnicos"].iloc[0] == 2
+    assert len(e2.bajas) == 1 and (e2.stock_actual["piezas"] == esc.stock_actual["piezas"]).all()
+    nuevo = cargar_estado(tmp_path / "otro.json")  # no existe: se crea con el ejemplo
+    assert (tmp_path / "otro.json").exists() and len(nuevo.stock_actual) == 15
+    for hoja in ("correccion_diaria", "bajas", "paradas", "expediciones"):
+        setattr(esc, hoja, getattr(esc, hoja).iloc[0:0])
+    guardar_estado(esc, ruta)
+    assert len(cargar_estado(ruta).paradas) == 0
 
 
 # --- personal entero y trabajadores ---------------------------------------------------------------
 def test_personal_entero_y_plantilla(esc06, rec06):
     hz = rec06.horizonte
-    for p in rec06.top + [rec06.baseline]:
+    for p in rec06.top:
         N = p.personas[RECURSOS]
         assert (N.to_numpy() == np.round(N.to_numpy())).all()
         for r in RECURSOS:
@@ -149,13 +202,13 @@ def test_personal_entero_y_plantilla(esc06, rec06):
             assert p.kpis[f"desperdicio_{r}_h"] >= -1e-6
         assert p.kpis["desperdicio_personal_h"] == pytest.approx(
             sum(p.kpis[f"desperdicio_{r}_h"] for r in RECURSOS))
-        # P >= N en cada turno, P <= disponibles
+        # presentes >= ocupados y >= disponibles de cada hora
         for ft, tn, slots in hz.turnos_trabajo():
             for r in RECURSOS:
                 P = p.plantilla[(p.plantilla["fecha_turno"] == ft) & (p.plantilla["turno"] == tn) &
                                 (p.plantilla["rol"] == r)]["plantilla"].iloc[0]
-                assert P >= N.loc[slots, r].max()
-                assert P <= min(hz.slots[f"{r}_disp"].iloc[slots])
+                assert P >= N.loc[slots, r].max()  # plantilla = todos los presentes
+                assert P >= max(hz.slots[f"{r}_disp"].iloc[slots])
 
 
 def test_trabajadores_cargas_y_ids_estables(rec06):
@@ -163,7 +216,7 @@ def test_trabajadores_cargas_y_ids_estables(rec06):
     pe = p.personal
     assert list(pe.columns[:8]) == ["slot", "hora", "turno", "rol", "trabajador", "celulas", "carga", "estado"]
     assert (pe["carga"] <= 1 + 1e-9).all()
-    assert set(pe["estado"]) <= {"ASIGNADO", "LIBRE", "EXCEDENTE", "PARADA"}
+    assert set(pe["estado"]) <= {"ASIGNADO", "LIBRE", "PARADA"}
     assert pe["trabajador"].str.match(r"^[MTN]-(OP|PK|CA|MT|CL)\d{2}$").all()
     # Σ cargas asignadas = Σ requisitos por hora y rol
     suma = pe.groupby(["slot", "rol"])["carga"].sum()
@@ -197,55 +250,16 @@ def test_baja_de_trabajador_concreto(esc06):
 
 # --- puntuación y datos -------------------------------------------------------------------------
 def test_puntuacion(esc06, rec06):
-    for p in rec06.top + [rec06.baseline]:
+    for p in rec06.top:
         pesos = {c: float(esc06.parametros[PESO_PARAM[c]]) for c in COMPONENTES}
         assert p.puntuacion == pytest.approx(100 * (1 - sum(pesos[c] * p.componentes[c] for c in COMPONENTES)),
                                              abs=1e-6)
-        assert all(0 <= p.componentes[c] <= 1 + 1e-9 for c in COMPONENTES)
+        assert all(0 <= p.componentes[c] for c in COMPONENTES)
+        assert all(p.componentes[c] <= 1 + 1e-9 for c in "RSQE")
 
 
-def test_ss_151_7_y_flags_y_definicion():
-    assert validar_ss_almacen(crear_escenario_ejemplo()) == pytest.approx(151.7, abs=0.1)
-    assert set(FLAGS) >= {f"F{i}" for i in range(1, 12)}
-    assert "pieza exclusiva" in FLAGS["F1"] and "solar" in FLAGS["F5"] and "11-14" in FLAGS["F5"]
-    assert DEFINICION_PLAN_MANUAL.startswith("Plan de referencia manual")
-
-
-def test_excel_roundtrip_y_compatibilidad(tmp_path):
-    ruta = crear_plantilla_ejemplo(tmp_path / "x.xlsx")
-    esc = cargar_entrada(ruta)
-    assert demanda_dia(esc, "2026-10-02") == (520.0, 980.0)
-    assert len(esc.paradas) == 1 and esc.paradas["tipo"].iloc[0] == "PROGRAMADA" and esc.paradas["tecnicos"].iloc[0] == 2
-    assert len(esc.bajas) == 1
-    # Excel v1: chasis_*, Disponibilidad, Mantenimientos, RecursosReales
-    base = crear_escenario_ejemplo()
-    with pd.ExcelWriter(tmp_path / "v1.xlsx") as w:
-        base.celulas.assign(piezas_por_conjunto=1).to_excel(w, sheet_name="Celulas", index=False)
-        base.turnos.to_excel(w, sheet_name="Turnos", index=False)
-        base.almacen.to_excel(w, sheet_name="Almacen", index=False)
-        pd.DataFrame({"semana_inicio": ["2026-09-28"], "chasis_ve": [2400], "chasis_comb": [1600]}).to_excel(
-            w, sheet_name="DemandaSemanal", index=False)
-        base.stock_actual.to_excel(w, sheet_name="StockActual", index=False)
-        pd.DataFrame({"celula": [14], "estado": ["BAJA"], "desde": ["2026-10-02 06:00"],
-                      "hasta": ["2026-10-03 06:00"]}).to_excel(w, sheet_name="Disponibilidad", index=False)
-        pd.DataFrame({"fecha": ["2026-10-02"], "turno": ["T"], "celula": [13], "tecnicos": [2]}).to_excel(
-            w, sheet_name="Mantenimientos", index=False)
-        pd.DataFrame({"fecha": ["2026-10-02"], "turno": ["T"], "operarios": [15]}).to_excel(
-            w, sheet_name="RecursosReales", index=False)
-    v1 = cargar_entrada(tmp_path / "v1.xlsx")
-    assert demanda_dia(v1, "2026-10-01") == (480.0, 320.0)
-    assert set(v1.paradas["tipo"]) == {"AVERIA", "PROGRAMADA"}
-    assert v1.bajas["operarios"].iloc[0] == 1
-
-
-def test_hojas_vacias_roundtrip(tmp_path):
-    esc = _esc(3)
-    for hoja in ("correccion_diaria", "bajas", "paradas", "expediciones"):
-        setattr(esc, hoja, getattr(esc, hoja).iloc[0:0])
-    guardar_entrada(esc, tmp_path / "e.xlsx")
-    e2 = cargar_entrada(tmp_path / "e.xlsx")
-    assert len(e2.paradas) == 0 and demanda_dia(e2, "2026-10-02") == (500.0, 1000.0)
-    assert recomendar(e2, "2026-10-02 06:00", top_k=1).mejor is not None
+def test_ss_151_7():
+    assert validar_ss_almacen(estado_ejemplo()) == pytest.approx(151.7, abs=0.1)
 
 
 def test_horizonte_cruza_fin_de_semana():
@@ -302,44 +316,21 @@ def test_fin_parada_reactiva():
     assert len(p) == 1 and p["hasta"].iloc[0] == pd.Timestamp("2026-10-02 10:00")
 
 
-@pytest.fixture(scope="module")
-def contingencia():
+def test_contingencia_celulas_y_personas():
     esc = _esc(4)
     rec = recomendar(esc, "2026-10-02 06:00", top_k=1)
-    act = rec.mejor.activacion[14]
-    h = next(i for i in range(len(act)) if act[i] > 0.5)  # primera hora con la C14 activa
-    desde = rec.horizonte.slots["inicio"].iloc[h]
-    return contingencia_celula(esc, rec, 14, desde, pd.Timestamp("2026-10-03 06:00")), desde
-
-
-def test_contingencia_c14(contingencia):
-    d, desde = contingencia
-    assert set(d) >= {"rec_antes", "rec_despues", "reubicacion", "maquinas", "agotamiento", "resumen"}
-    ru = d["reubicacion"]
-    assert list(ru.columns) == ["persona", "rol", "de_celula", "a_celulas", "desde", "hasta"]
-    ops = ru[(ru["rol"] == "operarios") & ru["de_celula"].str.contains(r"C14(?!\d)") & (ru["desde"] == desde)]
-    assert ops["persona"].nunique() == 3  # los 3 operarios de la C14
-    assert (ru["persona"].str.match(r"^[MTN]-(OP|PK|CA|MT|CL)\d{2}$")).all()
-    assert len(d["resumen"]) > 0 and any("operarios de la C14" in m for m in d["resumen"])
-    assert d["rec_despues"].inicio == desde
-    assert (d["rec_despues"].mejor.activacion[14] == 0).all()
-    assert {"celula", "horas_antes", "horas_despues", "delta", "franjas_nuevas"} == set(d["maquinas"].columns)
-    assert set(d["agotamiento"]) >= {"hora_bajo_ss", "hora_sin_stock"}
-
-
-# --- plantillas de demo y semana -----------------------------------------------------------------
-def test_escenario_contingencia_xlsx(tmp_path):
-    esc = cargar_entrada(crear_plantilla_contingencia(tmp_path / "c.xlsx"))
-    assert (esc.paradas["tipo"] == "AVERIA").sum() == 1 and (esc.paradas["celula"] == 14).any()
-    esc.parametros["tiempo_limite_s"] = 4
-    rec = recomendar(esc, "2026-10-02 10:00", top_k=1)
-    assert rec.mejor is not None and (rec.mejor.activacion[14] == 0).all()
-    assert (validar(esc, rec.horizonte, rec.mejor) == []) or not rec.mejor.viable
-
-
-def test_simular_semana_devuelve_filas_por_turno():
-    esc = _esc()
-    df = simular_semana(esc, "2026-09-28", iteraciones=3)  # la semana completa son 15 turnos (~90 s)
-    assert len(df) == 3 and list(df["turno"][:3]) == ["M", "T", "N"]
-    assert df["tiempo_s"].max() < 15
-    assert (df["estado"] != "INVIABLE").all()
+    d = contingencia(esc, rec, "2026-10-02 10:00",
+                     bajas_celulas=[{"celula": 14, "desde": "2026-10-02 10:00", "hasta": "2026-10-02 22:00"},
+                                    {"celula": 3, "desde": "2026-10-02 10:00", "hasta": "2026-10-02 22:00"}],
+                     bajas_personas=["M-OP02"])
+    assert set(d) >= {"rec_antes", "rec_despues", "reubicacion", "maquinas", "agotamiento", "desabastecimiento",
+                      "aviso_direccion", "resumen"}
+    p2 = d["rec_despues"].mejor
+    assert d["rec_despues"].inicio == pd.Timestamp("2026-10-02 10:00")
+    assert "M-OP02" not in set(p2.personal["trabajador"])
+    assert any("M-OP02" in m for m in d["resumen"]) and len(d["resumen"]) > 2
+    assert list(d["desabastecimiento"].columns) == ["pieza", "ciclo", "piezas_no_servidas"]
+    with pytest.raises(ValueError):
+        contingencia(esc, rec, "2026-10-02 10:00", bajas_celulas=[{"celula": 10, "desde": "2026-10-02 10:00"}])
+    d1 = contingencia_celula(esc, rec, 14, "2026-10-02 10:00", "2026-10-02 22:00")
+    assert set(d1["agotamiento"].columns) >= {"hora_bajo_ss", "hora_sin_stock"}

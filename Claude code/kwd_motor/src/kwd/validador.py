@@ -1,18 +1,19 @@
-"""Validador independiente: recalcula las reglas obligatorias y la puntuación a partir del plan (v2).
+"""Validador independiente: recalcula las reglas obligatorias y la puntuación a partir del plan (v3).
 
 No reutiliza el modelo MILP ni `modelo.evaluar`; recalcula con sus propias fórmulas sobre
 `plan.activacion` y `plan.uso`. Una lista vacía significa que el plan cumple todas las reglas
-(certificado de factibilidad). Bajar del stock de seguridad es un AVISO (los camiones pueden llevárselo);
-stock < 0 (pedido no servido) es un incumplimiento.
+(certificado de factibilidad). Bajar del stock de seguridad y el stock < 0 (pedido no servido) NO son
+incumplimientos sino avisos (con pedidos sin servir el plan es CRITICO). Incumplimientos duros: almacén > 800 m²,
+reglas de células y de recursos.
 """
 from __future__ import annotations
 
 import math
 
 import numpy as np
+import pandas as pd
 
-from .config import (CELULA_LOGISTICA, CELULAS_PAREJA, COMPONENTES, PESO_PARAM, PESO_PLANTILLA, RECURSOS,
-                     RECURSOS_R)
+from .config import CELULA_LOGISTICA, CELULAS_PAREJA, COMPONENTES, PESO_PARAM, RECURSOS
 from .datos import celulas_productivas, ss_por_celula, stock_inicial, tabla_celulas
 
 TOL_STOCK = 1e-3   # piezas
@@ -85,10 +86,12 @@ def validar(esc, hz, plan) -> list[str]:
                     inc.append(f"Regla 5: personas de {r} no enteras ({n:.2f}) en {inicio[h]}.")
                 if n < usado[h, j] - 1e-6:
                     inc.append(f"Regla 5: personas {r} N={n:.0f} < carga {usado[h, j]:.2f} en {inicio[h]}.")
+                if n > math.ceil(usado[h, j] - 1e-6) + 1e-6:
+                    inc.append(f"Regla 5: personas {r} N={n:.0f} > techo de la carga {usado[h, j]:.2f} en {inicio[h]}.")
                 if n > DISP[h, j] + 1e-6:
                     inc.append(f"Regla 5: personas {r} N={n:.0f} > disponibles {DISP[h, j]:.2f} en {inicio[h]}.")
 
-    # Reglas 6 y 8: stock (>= 0, un camión puede llevarse el SS) y espacio
+    # Reglas 6 y 8: balance de stock y espacio (stock < 0 = pedido no servido: aviso, no incumplimiento)
     cap = np.array([float(t.loc[c, "cap_h"]) for c in prods])
     dens = np.array([float(t.loc[c, "piezas_m2"]) for c in prods])
     pu = np.array([ic[c] for c in prods])
@@ -100,8 +103,6 @@ def validar(esc, hz, plan) -> list[str]:
             if abs(st[h, k] - pst[h, k]) > TOL_STOCK:
                 inc.append(f"Regla 6: balance de stock inconsistente en célula {c}, {inicio[h]} "
                            f"(plan {pst[h, k]:.2f} vs recalculado {st[h, k]:.2f}).")
-            if st[h, k] < -TOL_STOCK:
-                inc.append(f"Regla 7: pedido no servido en la pieza {c}, {inicio[h]} (stock {st[h, k]:.1f} < 0).")
     esp = (st / np.where(dens > 0, dens, np.inf)[None, :]).sum(axis=1)
     for h in range(H):
         if esp[h] > A + TOL_ESPACIO:
@@ -132,23 +133,17 @@ def _validar_personal(esc, hz, plan, REQ, A_, ic, W) -> list[str]:
             got = float(suma.get((h, r), 0.0))
             if abs(usado[h, j] - got) > 1e-4:
                 inc.append(f"Personal: carga asignada {r} {got:.3f} != requisito {usado[h, j]:.3f} en slot {h}.")
-    # plantilla <= disponibles; ids estables dentro del turno
-    crew = pe[pe["estado"].isin(["ASIGNADO", "LIBRE"])]
-    for ft, tn, slots in hz.turnos_trabajo():
+    # todo el personal presente está ASIGNADO o LIBRE (o PARADA): presentes = disponibles de la hora
+    crew = pe[pe["estado"].isin(["ASIGNADO", "LIBRE"])].groupby(["slot", "rol"]).size()
+    for h in range(len(s)):
+        if not W[h]:
+            continue
         for r in RECURSOS:
-            g = crew[(crew["fecha_turno"] == ft) & (crew["turno"] == tn) & (crew["rol"] == r)]
-            if not len(g):
-                continue
-            por_slot = g.groupby("slot")["trabajador"].apply(frozenset)
-            conjuntos = {h: por_slot.get(h, frozenset()) for h in slots}
-            if len(set(conjuntos.values())) > 1:
-                inc.append(f"Personal: plantilla {r} del turno {tn} no estable entre horas.")
-            disp_min = min(float(s[f"{r}_disp"].iloc[h]) for h in slots)
-            if len(conjuntos[slots[0]]) > disp_min + 1e-6:
-                inc.append(f"Personal: plantilla {r} del turno {tn} supera los disponibles.")
-            for h in slots:
-                if float(plan.personas.at[h, r]) > len(conjuntos[h]) + 1e-6:
-                    inc.append(f"Personal: plantilla {r} < N en slot {h}.")
+            n = int(crew.get((h, r), 0))
+            if n > math.floor(float(s[f"{r}_disp"].iloc[h]) + 1e-6):
+                inc.append(f"Personal: {n} presentes de {r} > disponibles en slot {h}.")
+            if float(plan.personas.at[h, r]) > n + 1e-6:
+                inc.append(f"Personal: N de {r} > personas presentes en slot {h}.")
     return inc
 
 
@@ -158,28 +153,20 @@ def _validar_puntuacion(esc, hz, plan, t, celdas, prods, ss, i0, A, W, usado, A_
     p = esc.parametros
     s = hz.slots
     H = len(s)
-    k = float(p["colchon_ss"])
     N = np.ceil(usado - 1e-6)
     DISP = np.stack([s[f"{r}_disp"].to_numpy(dtype=float) for r in RECURSOS], axis=1)
-    ir = [RECURSOS.index(r) for r in RECURSOS_R]
 
-    # R = 0,7 media(P/disp turno) + 0,3 media(N/disp hora)  (roles de RECURSOS_R); P = pico de N en el turno
-    ratios_p = []
-    for ft, tn, slots in hz.turnos_trabajo():
-        for j in ir:
-            d = DISP[slots, j].min()
-            if d > 1e-9:
-                ratios_p.append(N[slots, j].max() / d)
-    ratios_n = [N[h, j] / DISP[h, j] for h in range(H) if W[h] for j in ir if DISP[h, j] > 1e-9]
-    mp = sum(ratios_p) / len(ratios_p) if ratios_p else 0.0
-    mn = sum(ratios_n) / len(ratios_n) if ratios_n else 0.0
-    R = PESO_PLANTILLA * mp + (1 - PESO_PLANTILLA) * mn
+    # R = fracción libre del personal presente = Σ (Disp - N) / Σ Disp en horas laborables
+    den = float(DISP[W].sum())
+    R = float((DISP[W] - N[W]).sum() / den) if den > 1e-9 else 0.0
 
     S = float(np.mean(esp / A)) if H else 0.0
-    ssv = np.array([ss[c] for c in prods])
+    # B = media sobre piezas y cierres de turno de |I - óptimo| / óptimo
     B = 0.0
-    if k > 0 and prods and H:
-        B = float((np.maximum(0.0, (1 + k) * ssv[None, :] - st) / (k * ssv[None, :])).sum() / (len(prods) * H))
+    if len(hz.cierres) and prods:
+        opt = hz.stock_optimo[prods].to_numpy(dtype=float)
+        stc = st[list(hz.cierres)]
+        B = float((np.abs(stc - opt) / np.where(opt > 0, opt, np.inf)).mean())
 
     im, icc = RECURSOS.index("mto"), RECURSOS.index("calidad")
     qs = []
@@ -231,8 +218,84 @@ def consumos_ss(esc, hz, plan) -> list[dict]:
     return res
 
 
+def _instante(hz, slot: int):
+    """Hora del ciclo de expedición del slot (si lo hay) o fin del slot."""
+    cam = hz.camiones
+    if len(cam):
+        m = cam[cam["slot"] == slot]
+        if len(m):
+            return pd.Timestamp(m["fecha_hora"].iloc[0])
+    return pd.Timestamp(hz.slots["fin"].iloc[slot])
+
+
+def agotamiento(esc, hz, plan) -> pd.DataFrame:
+    """Por pieza: hora en que baja del SS, hora en que se agota el stock (<0), hora en que repone el SS y mínimo.
+
+    Sólo incluye las piezas que bajan del SS en el horizonte.
+    """
+    ss = ss_por_celula(esc)
+    cols = ["pieza", "hora_bajo_ss", "hora_sin_stock", "hora_repone_ss", "stock_min", "ss"]
+    filas = []
+    for c in plan.stock.columns:
+        v = plan.stock[c].to_numpy(dtype=float)
+        bajo = np.where(v < ss[c] - TOL_STOCK)[0]
+        if not len(bajo):
+            continue
+        cero = np.where(v < -TOL_STOCK)[0]
+        rep = [h for h in range(int(bajo[0]), len(v)) if v[h] >= ss[c] - TOL_STOCK]
+        filas.append({"pieza": int(c), "hora_bajo_ss": _instante(hz, int(bajo[0])),
+                      "hora_sin_stock": _instante(hz, int(cero[0])) if len(cero) else None,
+                      "hora_repone_ss": pd.Timestamp(hz.slots["fin"].iloc[rep[0]]) if rep else None,
+                      "stock_min": float(v.min()), "ss": float(ss[c])})
+    return pd.DataFrame(filas, columns=cols)
+
+
+def desabastecimiento(esc, hz, plan) -> pd.DataFrame:
+    """Piezas no servidas por pieza y ciclo de expedición: DataFrame `pieza, ciclo, piezas_no_servidas`.
+
+    Se considera no servido el incremento del pedido pendiente (stock negativo) en la hora del ciclo.
+    """
+    filas = []
+    for c in plan.stock.columns:
+        pend = np.maximum(0.0, -plan.stock[c].to_numpy(dtype=float))
+        prev = 0.0
+        for h in range(len(pend)):
+            nuevo = pend[h] - prev
+            prev = pend[h]
+            if nuevo > TOL_STOCK:
+                filas.append({"pieza": int(c), "ciclo": _instante(hz, h), "piezas_no_servidas": float(nuevo)})
+    return pd.DataFrame(filas, columns=["pieza", "ciclo", "piezas_no_servidas"])
+
+
+def aviso_direccion(esc, hz, plan) -> str | None:
+    """Aviso para dirección si hay pedidos sin servir: pieza, hora en que se agota el SS y el stock, piezas no
+    servidas por ciclo y total. None si todo se sirve."""
+    des = plan.desabastecimiento if len(plan.desabastecimiento) else desabastecimiento(esc, hz, plan)
+    if not len(des):
+        return None
+    ag = plan.agotamiento if len(plan.agotamiento) else agotamiento(esc, hz, plan)
+
+    def f(ts):
+        return f"{pd.Timestamp(ts):%H:%M} del {pd.Timestamp(ts):%d/%m}"
+    partes = []
+    for pieza, g in des.groupby("pieza"):
+        a = ag[ag["pieza"] == pieza]
+        txt = f"Pieza {pieza}: "
+        if len(a):
+            if pd.notna(a["hora_bajo_ss"].iloc[0]):
+                txt += f"agota el stock de seguridad a las {f(a['hora_bajo_ss'].iloc[0])}; "
+            if pd.notna(a["hora_sin_stock"].iloc[0]):
+                txt += f"se queda sin stock a las {f(a['hora_sin_stock'].iloc[0])}; "
+        ciclos = ", ".join(f"{pd.Timestamp(x['ciclo']):%d/%m %H:%M} -> {x['piezas_no_servidas']:.0f}"
+                           for _, x in g.iterrows())
+        txt += f"piezas no servidas por ciclo ({ciclos}); total {g['piezas_no_servidas'].sum():.0f} piezas."
+        partes.append(txt)
+    total = float(des["piezas_no_servidas"].sum())
+    return f"AVISO PARA DIRECCIÓN: habrá pedidos sin servir ({total:.0f} piezas en total). " + " ".join(partes)
+
+
 def avisos_plan(esc, hz, plan) -> list[str]:
-    """Avisos (no violaciones): SS consumido por una expedición (F20) y stock final bajo el objetivo (F18)."""
+    """Avisos (no violaciones): stock de seguridad consumido por una expedición, con su reposición."""
     out = []
     if plan.stock.empty:
         return out
@@ -241,11 +304,4 @@ def avisos_plan(esc, hz, plan) -> list[str]:
                else "no se repone en el horizonte")
         out.append(f"Stock de seguridad de la pieza {d['celula']} consumido por expedición de "
                    f"{d['desde']:%H:%M} a {d['hasta']:%H:%M}; {rep}.")
-    if hz.envio_final is not None:
-        ss = ss_por_celula(esc)
-        final = plan.stock.iloc[-1]
-        out += [f"Stock final por debajo del objetivo de cobertura (célula {c}): {final[c]:.0f} < "
-                f"{ss[c] + float(hz.envio_final.get(c, 0.0)):.0f} piezas."
-                for c in plan.stock.columns if final[c] < ss[c] + float(hz.envio_final.get(c, 0.0)) - TOL_STOCK
-                and final[c] >= ss[c] - TOL_STOCK]
     return out

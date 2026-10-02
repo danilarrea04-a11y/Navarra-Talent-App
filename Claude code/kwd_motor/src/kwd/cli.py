@@ -1,6 +1,6 @@
 """Línea de comandos: imprime el Top 3 y los KPIs.
 
-Uso: python -m kwd.cli --entrada data/entrada_ejemplo.xlsx [--inicio "2026-10-02 14:00"] [--pdf salida/informe.pdf]
+Uso: python -m kwd.cli --estado data/estado.json [--inicio "2026-10-02 14:00"] [--pdf salida/informe.pdf]
 """
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ import sys
 
 import pandas as pd
 
-from .datos import cargar_entrada
+from .datos import cargar_estado
+from .config import RECURSOS
 from .motor import Recomendacion, recomendar
 
 
@@ -29,9 +30,12 @@ def _linea_plan(p, hz) -> str:
             f"    kWh red {k['kwh_total']:.0f} (bruto {k['kwh_bruto']:.0f}; solar {k['kwh_solar_pct']:.0f} %; "
             f"noche {k['kwh_noche']:.0f})  demanda cubierta {k['demanda_cubierta_pct']:.0f} %  "
             f"horas-célula {k['horas_celula']:.0f}\n"
-            f"    camiones/día {k['camiones_dia']:.0f} (máx {k['camiones_por_ciclo_max']}/ciclo)  desperdicio personal "
-            f"{k['desperdicio_personal_h']:.1f} h  horas libres plantilla {k['horas_libres_total']}  "
-            f"excedente {k['excedente_total']}  consumos de SS {k.get('ss_consumos', 0)}")
+            f"    camiones/día {k['camiones_dia']:.0f} (máx {k['camiones_por_ciclo_max']}/ciclo)  "
+            f"HORAS LIBRES total {k['horas_libres_total']:.0f} (" +
+            ", ".join(f"{r} {k[f'horas_libres_{r}']:.0f}" for r in RECURSOS) + ")  "
+            f"consumos de SS {k.get('ss_consumos', 0)}\n"
+            f"    stock vs óptimo en cierres: desviación media {k['stock_opt_dev_media_pct'] or 0:.1f} %, "
+            f"máx {k['stock_opt_dev_max_pct'] or 0:.1f} %")
 
 
 def imprimir(rec: Recomendacion) -> None:
@@ -41,15 +45,10 @@ def imprimir(rec: Recomendacion) -> None:
     for p in rec.top:
         print(_linea_plan(p, hz))
     if rec.contingencia is not None:
-        print("*** PLAN DE CONTINGENCIA (INVIABLE) ***")
+        print("*** PLAN INVIABLE ***")
         print(_linea_plan(rec.contingencia, hz))
         for m in rec.contingencia.incumplimientos[:10]:
             print("    - " + m)
-    print("-" * 100)
-    print(_linea_plan(rec.baseline, hz))
-    if rec.baseline.incumplimientos:
-        print(f"    (referencia con {len(rec.baseline.incumplimientos)} incumplimientos, p. ej. "
-              f"{rec.baseline.incumplimientos[0]})")
     print("=" * 100)
     e = rec.explicacion
     print(f"QUÉ ACTIVAR en el turno actual ({e['turno_actual']}):")
@@ -58,10 +57,11 @@ def imprimir(rec: Recomendacion) -> None:
     print("\nPOR QUÉ:")
     for m in e["porque"]:
         print("  - " + m)
-    d = e["impacto"]["delta_vs_baseline"]
-    print("\nIMPACTO vs plan de referencia: "
-          f"horas-operario {d['horas_operario']:+.1f}, m² medios {d['m2_medio']:+.1f}, "
-          f"kWh {d['kwh_total']:+.1f}, puntuación {d['puntuacion']:+.2f}")
+    for d in e["impacto"]["delta_vs_alternativas"]:
+        print(f"IMPACTO vs {d['nombre']}: puntuación {d['puntuacion']:+.2f}, "
+              f"horas libres {d['horas_libres_total']:+.0f}")
+    if rec.aviso_direccion:
+        print("\n" + rec.aviso_direccion)
     if rec.alertas:
         print("\nALERTAS:")
         for m in rec.alertas:
@@ -80,13 +80,13 @@ def main(argv=None) -> int:
     except Exception:
         pass
     ap = argparse.ArgumentParser(description="Motor de decisión KWD")
-    ap.add_argument("--entrada", required=True, help="Excel de entrada")
+    ap.add_argument("--estado", default=None, help="JSON de estado (por defecto data/estado.json)")
     ap.add_argument("--inicio", default=None, help='Inicio del plan, p. ej. "2026-10-02 14:00"')
     ap.add_argument("--horas", type=int, default=None, help="Horas del horizonte")
     ap.add_argument("--top", type=int, default=3, help="Número de alternativas")
     ap.add_argument("--pdf", default=None, help="Ruta del informe PDF (requiere kwd.informes)")
     args = ap.parse_args(argv)
-    esc = cargar_entrada(args.entrada)
+    esc = cargar_estado(args.estado)
     inicio = pd.Timestamp(args.inicio) if args.inicio else pd.Timestamp.now().floor("h")
     rec = recomendar(esc, inicio, args.horas, args.top)
     imprimir(rec)

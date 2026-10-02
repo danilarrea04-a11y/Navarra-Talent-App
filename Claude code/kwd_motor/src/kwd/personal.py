@@ -1,9 +1,8 @@
-"""Personal: plantilla por turno, trabajadores enumerados y asignación puesto a puesto (A7 / A7-bis).
+"""Personal: trabajadores enumerados y asignación puesto a puesto.
 
-Post-proceso del plan: dado N (personas por hora y rol, entero) calcula la plantilla P por turno (pico de N),
-numera a los trabajadores (M-OP01, T-CA02 ...) y reparte cada hora las cargas de las células activas entre los
-trabajadores de la plantilla ("first-fit decreasing" estable). Un trabajador puede cubrir varias células
-cuya suma de cargas sea <= 1.
+Post-proceso del plan: dado N (personas ocupadas por hora y rol, entero) numera a los trabajadores presentes
+(M-OP01, T-CA02 ...) y reparte cada hora las cargas de las células activas entre ellos ("first-fit decreasing"
+estable). Un trabajador puede cubrir varias células cuya suma de cargas sea <= 1; el resto está LIBRE.
 """
 from __future__ import annotations
 
@@ -19,7 +18,7 @@ EPS = 1e-9
 
 
 def personas_enteras(req_frac: np.ndarray) -> np.ndarray:
-    """N = techo de la suma de cargas (con tolerancia numérica)."""
+    """N = personas ocupadas = techo de la suma de cargas (con tolerancia numérica)."""
     return np.ceil(np.asarray(req_frac, dtype=float) - 1e-6)
 
 
@@ -125,10 +124,12 @@ def _texto(asig_w: list) -> tuple[str, str]:
 
 
 def asignacion_personal(esc, hz, plan, previo: tuple | None = None):
-    """Asignación nominal por hora, resumen por trabajador y plantilla por turno.
+    """Asignación nominal por hora, resumen por trabajador y presentes por turno.
 
-    `previo`: (clave_turno=(fecha_turno, turno), {trabajador: {celulas}}) con la asignación de la hora anterior
-    (para mantener a cada trabajador en su puesto al reconfigurar). Devuelve (personal, trabajadores, plantilla).
+    Todo el personal presente (estándar - bajas) está ASIGNADO a una o varias células, LIBRE o, si es técnico
+    ocupado en una parada, PARADA. `previo`: (clave_turno=(fecha_turno, turno), {trabajador: {celulas}}) con la
+    asignación de la hora anterior (para mantener a cada trabajador en su puesto al reconfigurar).
+    Devuelve (personal, trabajadores, plantilla); `plantilla` = presentes por turno y rol y horas libres.
     """
     t = tabla_celulas(esc)
     s = hz.slots
@@ -139,21 +140,21 @@ def asignacion_personal(esc, hz, plan, previo: tuple | None = None):
     ridx = {r: j for j, r in enumerate(RECURSOS)}
     hora_ = s["hora"].to_numpy()
     inicio_ = s["inicio"].tolist()
-    tec_ = s["tecnicos"].to_numpy(dtype=float)
     filas, plant = [], []
     for ft, tn, slots in hz.turnos_trabajo():
         clave = (pd.Timestamp(ft), tn)
         for r in RECURSOS:
             ids = trabajadores_disponibles(esc, ft, tn, r)
-            n_arr = [int(round(N_[h, ridx[r]])) for h in slots]
-            P = max(n_arr) if n_arr else 0
-            crew = ids[:P]
-            exc = ids[P:]
+            disp = s[f"{r}_disp"].to_numpy(dtype=float)
             prev = {}
             if previo is not None and (pd.Timestamp(previo[0][0]), previo[0][1]) == clave:
                 prev = {w: set(cs) for w, cs in previo[1].items()}
             horas_libres = 0
-            for h, n_h in zip(slots, n_arr):
+            for h in slots:
+                n_h = int(round(N_[h, ridx[r]]))
+                n_act = min(len(ids), int(math.floor(disp[h] + 1e-9)))
+                crew = ids[:n_act]          # presentes y disponibles esta hora
+                parados = ids[n_act:]       # técnicos ocupados en una parada programada
                 act = [c for j, c in enumerate(cols_cel) if A_[h, j] > 0.5 and reqr[r][c] > EPS]
                 items = _items({c: reqr[r][c] for c in act})
                 asig = _asignar_hora(items, crew, n_h, prev)
@@ -172,18 +173,13 @@ def asignacion_personal(esc, hz, plan, previo: tuple | None = None):
                                       "detalle": ""})
                         horas_libres += 1
                         nuevo_prev[w] = set()
-                tec = int(math.ceil(float(tec_[h]) - 1e-9)) if r == "mto" else 0
-                for j, w in enumerate(exc):
-                    if j < tec:
-                        filas.append({**base, "trabajador": w, "celulas": "", "carga": 0.0, "estado": "PARADA",
-                                      "detalle": "En parada programada"})
-                    else:
-                        filas.append({**base, "trabajador": w, "celulas": "", "carga": 0.0, "estado": "EXCEDENTE",
-                                      "detalle": ""})
+                for w in parados:
+                    filas.append({**base, "trabajador": w, "celulas": "", "carga": 0.0, "estado": "PARADA",
+                                  "detalle": "En parada programada"})
                 prev = nuevo_prev
-            plant.append({"fecha_turno": clave[0], "turno": tn, "rol": r, "plantilla": P,
-                          "disponibles": len(ids), "excedente": max(0, len(ids) - P),
-                          "horas_libres": int(sum(P - n for n in n_arr))})
+            plant.append({"fecha_turno": clave[0], "turno": tn, "rol": r, "plantilla": len(ids),
+                          "disponibles": len(ids), "excedente": 0,
+                          "horas_libres": int(round(sum(disp[h] - N_[h, ridx[r]] for h in slots)))})
     cols = ["slot", "hora", "turno", "rol", "trabajador", "celulas", "carga", "estado", "fecha_turno", "inicio",
             "detalle"]
     personal = pd.DataFrame(filas, columns=cols)
@@ -218,7 +214,7 @@ def resumen_trabajadores(personal: pd.DataFrame) -> pd.DataFrame:
                       "horas_asignado": int((g["estado"] == "ASIGNADO").sum()),
                       "horas_libre": int((g["estado"] == "LIBRE").sum()),
                       "celulas": txt, "fecha_turno": ft,
-                      "horas_excedente": int(g["estado"].isin(["EXCEDENTE", "PARADA"]).sum())})
+                      "horas_excedente": int((g["estado"] == "PARADA").sum())})
     return pd.DataFrame(filas, columns=cols)
 
 

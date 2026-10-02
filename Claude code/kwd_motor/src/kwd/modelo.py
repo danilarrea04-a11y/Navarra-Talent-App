@@ -1,4 +1,4 @@
-"""Modelo MILP (PuLP + HiGHS) y evaluación de planes (KPIs y puntuación) (v2)."""
+"""Modelo MILP (PuLP + HiGHS) y evaluación de planes (KPIs y puntuación) (v3)."""
 from __future__ import annotations
 
 import math
@@ -9,16 +9,15 @@ import numpy as np
 import pandas as pd
 import pulp
 
-from .config import (CELULA_LOGISTICA, CELULAS_PAREJA, COMPONENTES, PESO_IDLE, PESO_PARAM, PESO_PLANTILLA,
-                     RECURSOS, RECURSOS_R, TOL)
+from .config import CELULA_LOGISTICA, CELULAS_PAREJA, COMPONENTES, PESO_PARAM, RECURSOS, TOL
 from .datos import (Escenario, celulas_productivas, ss_por_celula, stock_inicial, tabla_celulas)
 from .horizonte import Horizonte
 from .personal import aplicar_personal, personas_enteras
 from .plan import Plan
-from .validador import avisos_plan, consumos_ss, validar
+from .validador import (agotamiento, aviso_direccion, avisos_plan, consumos_ss, desabastecimiento, validar)
 
-PENALIZACION = 1000.0  # penalización de las holguras duras (stock < 0, espacio): vuelven INVIABLE el plan
-PENALIZACION_FINAL = 10.0  # FLAG F18: holgura blanda de la condición terminal de stock
+PENALIZACION = 1000.0  # holgura del espacio de almacén (> 800 m²): vuelve INVIABLE el plan (el pedido no servido usa penalizacion_pedido)
+USO_MIN = 0.25  # fracción mínima de la hora que produce una célula activa (evita activar sólo para ocupar personal)
 PESO_ARRANQUES = 1e-4  # estabilidad: penalización por arranque
 TOL_HOLGURA = 1e-6
 ESCALA_OBJ = 1000.0  # escala del objetivo (evita costes ~1e-8 por debajo de la tolerancia del solver)
@@ -50,10 +49,6 @@ def preparar(esc: Escenario, hz: Horizonte) -> SimpleNamespace:
     s = hz.slots
     fmax = max(float(p["factor_solar"]), float(p["factor_noche"]), 1.0)
     disp = np.stack([s[f"{r}_disp"].to_numpy(dtype=float) for r in RECURSOS], axis=1)
-    # turnos laborables del horizonte con la disponibilidad mínima de cada rol (cota de la plantilla P)
-    turnos = []
-    for ft, tn, slots in hz.turnos_trabajo():
-        turnos.append((np.array(slots, dtype=int), disp[slots].min(axis=0), tn, ft))
     d = SimpleNamespace(
         esc=esc, hz=hz, todas=todas, prods=prods, H=len(s),
         ipos={c: i for i, c in enumerate(todas)},
@@ -66,36 +61,32 @@ def preparar(esc: Escenario, hz: Horizonte) -> SimpleNamespace:
         i0=np.array([i0[c] for c in prods]),
         es_ve=np.array([bool(t.loc[c, "es_ve"]) for c in prods]),
         env=hz.envios[prods].to_numpy(dtype=float),
-        env_final=(hz.envio_final.reindex(prods).fillna(0.0).to_numpy(dtype=float)
-                   if hz.envio_final is not None else np.zeros(len(prods))),
-        disp=disp, turnos=turnos,
+        disp=disp,
+        cierres=list(hz.cierres),
+        opt=(hz.stock_optimo[prods].to_numpy(dtype=float) if len(hz.cierres) else np.zeros((0, len(prods)))),
         W=s["laborable"].to_numpy(dtype=bool),
         f=s["factor_energia"].to_numpy(dtype=float),
         hora=s["hora"].to_numpy(dtype=int),
         A=esc.area_producto_terminado(),
-        k=float(p["colchon_ss"]),  # FLAG F9
         fmax=fmax,
         pesos={c: float(p[PESO_PARAM[c]]) for c in COMPONENTES},
         solar=(float(p["solar_ini"]), float(p["solar_fin"])),
-        pen_ss=float(p.get("penalizacion_ss", 50.0)),  # FLAG F20
+        pen_ss=float(p.get("penalizacion_ss", 50.0)),
+        pen_pedido=float(p.get("penalizacion_pedido", 1000.0)),
     )
     d.mascara_densa = d.dens > 0
     return d
 
 
 def _componentes_RQ(N: np.ndarray, d) -> tuple[float, float]:
-    """(R, Q) a partir de las personas enteras N (H x 5).
+    """(R, Q) a partir de las personas ocupadas N (H x 5).
 
-    R = 0,7 media_{k,turno}(P/disp_turno) + 0,3 media_{k,h}(N/disp_h) con P = pico de N en el turno (FLAG F21);
+    R = Σ (Disp - N) / Σ Disp en horas laborables: fracción libre de TODO el personal presente.
     Q = media sobre horas laborables de la ocupación media de mto y calidad (N/disp).
     """
-    ir = [RECURSOS.index(r) for r in RECURSOS_R]
     iw = np.where(d.W)[0]
-    rp = [N[slots, k].max() / dmin[k] for slots, dmin, _, _ in d.turnos for k in ir if dmin[k] > 1e-9]
-    rn = [N[h, k] / d.disp[h, k] for h in iw for k in ir if d.disp[h, k] > 1e-9]
-    mp = float(np.mean(rp)) if rp else 0.0
-    mn = float(np.mean(rn)) if rn else 0.0
-    R = PESO_PLANTILLA * mp + (1 - PESO_PLANTILLA) * mn
+    den = float(d.disp[iw].sum())
+    R = float((d.disp[iw] - N[iw]).sum() / den) if den > 1e-9 else 0.0
     im, ic = RECURSOS.index("mto"), RECURSOS.index("calidad")
     q = []
     for h in iw:
@@ -104,6 +95,20 @@ def _componentes_RQ(N: np.ndarray, d) -> tuple[float, float]:
             q.append(sum(tt) / len(tt))
     Q = float(np.mean(q)) if q else 0.0
     return R, Q
+
+
+def _tabla_optimo(d, stock: np.ndarray) -> pd.DataFrame:
+    """Stock vs óptimo en cada cierre de turno: cierre, slot, celula, stock, optimo, desviacion, desviacion_pct."""
+    filas = []
+    s = d.hz.slots
+    for k, h in enumerate(d.cierres):
+        for j, c in enumerate(d.prods):
+            o = float(d.opt[k, j])
+            dv = float(stock[h, j] - o)
+            filas.append({"cierre": s["fin"].iloc[h], "slot": int(h), "celula": int(c), "stock": float(stock[h, j]),
+                          "optimo": o, "desviacion": dv, "desviacion_pct": 100.0 * abs(dv) / o if o > 0 else 0.0})
+    return pd.DataFrame(filas, columns=["cierre", "slot", "celula", "stock", "optimo", "desviacion",
+                                        "desviacion_pct"])
 
 
 # ---------------------------------------------------------------------------------------------
@@ -123,16 +128,15 @@ def evaluar(esc: Escenario, hz: Horizonte, activacion: pd.DataFrame, uso: pd.Dat
     dens_ok = np.where(d.mascara_densa, d.dens, np.inf)
     espacio = (stock / dens_ok[None, :]).sum(axis=1)  # m² de producto terminado
     req = a @ d.req                       # cargas fraccionarias por hora y rol
-    N = personas_enteras(req)             # personas enteras necesarias por hora y rol (FLAG F21)
+    N = personas_enteras(req)             # personas ocupadas por hora y rol
     energia_bruta = (u * d.kw[None, :]).sum(axis=1)
-    energia_red = energia_bruta * d.f  # FLAG F16
+    energia_red = energia_bruta * d.f
 
     # Componentes de la puntuación (menor = mejor)
     R, Q = _componentes_RQ(N, d)
     S = float(np.mean(espacio / d.A)) if H else 0.0
-    if d.k > 0 and len(d.prods):
-        corto = np.maximum(0.0, (1 + d.k) * d.ss[None, :] - stock)
-        B = float(np.mean(corto / (d.k * d.ss[None, :])))
+    if len(d.cierres) and len(d.prods):  # B = media de |I - óptimo| / óptimo en los cierres de turno
+        B = float(np.mean(np.abs(stock[d.cierres] - d.opt) / np.where(d.opt > 0, d.opt, np.inf)))
     else:
         B = 0.0
     den_e = d.W.sum() * d.kw.sum() * d.fmax
@@ -163,16 +167,22 @@ def evaluar(esc: Escenario, hz: Horizonte, activacion: pd.DataFrame, uso: pd.Dat
     )
     plan.personas = pd.DataFrame(N, index=idx, columns=RECURSOS)
     aplicar_personal(esc, hz, plan, previo)
+    plan.stock_vs_optimo = _tabla_optimo(d, stock)
     plan.kpis, plan.resumen_turnos = _kpis(d, hz, plan, energia_bruta)
-    _kpis_personal(plan)
     plan.incumplimientos = validar(esc, hz, plan)
     plan.viable = len(plan.incumplimientos) == 0
-    if not plan.viable and plan.estado in ("OPTIMO", "FACTIBLE"):
+    plan.desabastecimiento = desabastecimiento(esc, hz, plan)
+    plan.agotamiento = agotamiento(esc, hz, plan)
+    plan.aviso_direccion = aviso_direccion(esc, hz, plan)
+    if not plan.viable:
         plan.estado = "INVIABLE"
+    elif plan.aviso_direccion is not None and plan.estado in ("OPTIMO", "FACTIBLE", "EVALUADO"):
+        plan.estado = "CRITICO"  # pedidos sin servir: ejecutable pero con aviso para dirección
     plan.avisos = avisos_plan(esc, hz, plan)
     plan.kpis["ss_consumos"] = len(consumos_ss(esc, hz, plan))
-    if plan.estado in ("INVIABLE", "REFERENCIA"):
-        # No aplica: plan de contingencia o heurístico (sin garantía de óptimo)
+    plan.kpis["piezas_no_servidas_total"] = float(plan.desabastecimiento["piezas_no_servidas"].sum())
+    if plan.estado == "INVIABLE":
+        # No aplica: plan sin garantía de óptimo
         plan.idoneidad = None
         plan.gap = None
         plan.kpis["idoneidad"] = None
@@ -182,23 +192,7 @@ def evaluar(esc: Escenario, hz: Horizonte, activacion: pd.DataFrame, uso: pd.Dat
 def reasignar_personal(esc: Escenario, hz: Horizonte, plan: Plan, previo=None) -> None:
     """Recalcula la asignación nominal de personal de un plan (p. ej. partiendo de la del plan anterior)."""
     aplicar_personal(esc, hz, plan, previo)
-    _kpis_personal(plan)
     plan.incumplimientos = validar(esc, hz, plan)
-
-
-def _kpis_personal(plan: Plan) -> None:
-    """KPIs de plantilla: plantilla por turno y rol, horas libres de plantilla y excedente."""
-    k = plan.kpis
-    pl = plan.plantilla
-    k["plantilla"] = {}
-    for _, f in pl.iterrows():
-        k["plantilla"].setdefault(f"{f['turno']} {pd.Timestamp(f['fecha_turno']):%d/%m}", {})[f["rol"]] = int(f["plantilla"])
-    for r in RECURSOS:
-        g = pl[pl["rol"] == r]
-        k[f"horas_libres_{r}"] = int(g["horas_libres"].sum()) if len(g) else 0
-        k[f"excedente_{r}"] = int(g["excedente"].sum()) if len(g) else 0
-    k["horas_libres_total"] = int(sum(k[f"horas_libres_{r}"] for r in RECURSOS))
-    k["excedente_total"] = int(sum(k[f"excedente_{r}"] for r in RECURSOS))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -249,6 +243,25 @@ def _kpis_tramo(d, hz, plan: Plan, idx: np.ndarray, bruta: np.ndarray) -> dict:
         k[f"{r}_ocup_media_pct"] = float(100 * frac.mean())
         k[f"{r}_ocup_pico_pct"] = float(100 * frac.max())
     k["desperdicio_personal_h"] = float(sum(k[f"desperdicio_{r}_h"] for r in RECURSOS))
+    # horas libres = Σ (presentes - ocupados) en horas laborables (KPI principal)
+    for r in RECURSOS:
+        dp = rec[f"{r}_disp"].to_numpy()[idx][W]
+        un = rec[f"{r}_usado"].to_numpy()[idx][W]
+        k[f"horas_libres_{r}"] = float((dp - un).sum())
+        k[f"ocupacion_{r}_pct"] = float(100 * un.sum() / dp.sum()) if dp.sum() > 1e-9 else 0.0
+    k["horas_libres_total"] = float(sum(k[f"horas_libres_{r}"] for r in RECURSOS))
+    tot = sum(float(rec[f"{r}_disp"].to_numpy()[idx][W].sum()) for r in RECURSOS)
+    k["ocupacion_total_pct"] = float(100 * (1 - k["horas_libres_total"] / tot)) if tot > 1e-9 else 0.0
+    # stock vs óptimo en los cierres de turno de este tramo
+    cs = [h for h in d.cierres if h in set(idx.tolist())]
+    if cs:
+        sv = plan.stock_vs_optimo
+        g = sv[sv["slot"].isin(cs)]
+        k["stock_opt_dev_media_pct"] = float(g["desviacion_pct"].mean())
+        k["stock_opt_dev_max_pct"] = float(g["desviacion_pct"].max())
+        k["stock_opt_dev_media_pzs"] = float(g["desviacion"].abs().mean())
+    else:
+        k["stock_opt_dev_media_pct"] = k["stock_opt_dev_max_pct"] = k["stock_opt_dev_media_pzs"] = None
     esp = plan.espacio.to_numpy()[idx]
     k["m2_medio"] = float(esp.mean()) if esp.size else 0.0
     k["m2_pico"] = float(esp.max()) if esp.size else 0.0
@@ -286,6 +299,10 @@ def _kpis(d, hz, plan: Plan, bruta: np.ndarray):
     arr = np.maximum(0, np.diff(np.vstack([np.zeros(act.shape[1]), act]), axis=0)).sum()
     k["arranques"] = int(arr)
     k["horas_celula_productivas"] = float(plan.activacion[d.prods].to_numpy().sum())
+    sv = plan.stock_vs_optimo
+    k["stock_opt_por_cierre"] = [] if sv.empty else [
+        {"cierre": c, "dev_media_pct": float(g["desviacion_pct"].mean()), "dev_max_pct": float(g["desviacion_pct"].max())}
+        for c, g in sv.groupby("cierre", sort=True)]
     s = hz.slots
     filas = []
     clave = list(zip(s["fecha_turno"], s["turno"]))
@@ -344,73 +361,68 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
     prob = pulp.LpProblem("kwd_plan", pulp.LpMinimize)
 
     # --- variables ---
-    a, u, I, sh, sn, st, sho = {}, {}, {}, {}, {}, {}, {}
+    a, u, I, sh, sn, st = {}, {}, {}, {}, {}, {}
+    dpos, dneg = {}, {}
     for c in todas:
         for h in range(H):
             bloqueado = (h in hz.bloqueos.get(c, set())) or (not d.W[h])  # reglas 2 y 4
-            # regla 2 / FLAG F11: célula 10 siempre activa en horas laborables (salvo F14)
+            # regla 2 / célula 10 siempre activa en horas laborables (salvo F14)
             lo = 1 if (c == CELULA_LOGISTICA and hz.logistica_exigida[h]) else 0
             up = 0 if bloqueado else 1
             a[c, h] = _var(prob, f"a_{c}_{h}", lo, up, "Binary")
             if c in prods:
                 u[c, h] = _var(prob, f"u_{c}_{h}", 0, 1)
                 I[c, h] = _var(prob, f"I_{c}_{h}", None, None)
-                sh[c, h] = _var(prob, f"s_{c}_{h}", 0)   # SS consumido (prioridad máxima, F20)
-                sn[c, h] = _var(prob, f"sn_{c}_{h}", 0)  # pedido no servido (stock < 0): INVIABLE
+                sh[c, h] = _var(prob, f"s_{c}_{h}", 0)   # SS consumido (penalización alta)
+                sn[c, h] = _var(prob, f"sn_{c}_{h}", 0)  # pedido no servido (stock < 0): penalización máxima
                 st[c, h] = _var(prob, f"st_{c}_{h}", 0)
-                if d.k > 0:
-                    sho[c, h] = _var(prob, f"short_{c}_{h}", 0)
     sa = {h: _var(prob, f"sa_{h}", 0) for h in range(H)}
-    sf = {c: _var(prob, f"sf_{c}", 0) for c in prods}  # holgura terminal (F18)
+    for k_, h in enumerate(d.cierres):   # desviación |I - óptimo| en cada cierre de turno
+        for c in prods:
+            dpos[c, k_] = _var(prob, f"dp_{c}_{k_}", 0)
+            dneg[c, k_] = _var(prob, f"dn_{c}_{k_}", 0)
 
-    # personal entero: N por hora y rol, plantilla P por turno y rol (FLAG F21)
+    # personas ocupadas N por hora y rol (sólo en la fase entera): N = techo de la carga
     iw = np.where(d.W)[0]
-    Nv, Pv = {}, {}
-    for h in iw:
-        for j, r in enumerate(RECURSOS):
-            Nv[j, h] = _var(prob, f"N_{r}_{h}", 0, math.floor(d.disp[h, j] + 1e-9),
-                              "Integer" if entero else "Continuous")
-    for si, (slots, dmin, tn, ft) in enumerate(d.turnos):
-        for j, r in enumerate(RECURSOS):
-            Pv[j, si] = _var(prob, f"P_{r}_{si}", 0, math.floor(dmin[j] + 1e-9))  # continua: P = max N es entero al óptimo
+    Nv = {}
+    if entero:
+        for h in iw:
+            for j, r in enumerate(RECURSOS):
+                Nv[j, h] = _var(prob, f"N_{r}_{h}", 0, math.floor(d.disp[h, j] + 1e-9), "Integer")
 
     # --- restricciones ---
     for c in prods:
         for h in range(H):
             prob += u[c, h] <= a[c, h], f"r1_{c}_{h}"
+            prob += u[c, h] >= USO_MIN * a[c, h], f"r1m_{c}_{h}"  # una célula activa produce al menos USO_MIN de la hora
     par = [c for c in CELULAS_PAREJA if c in todas]
     if len(par) == 2:  # regla 3
         for h in range(H):
             prob += (a[par[0], h] - a[par[1], h] == 0), f"r3a_{h}"
             prob += (u[par[0], h] - u[par[1], h] == 0), f"r3u_{h}"
-    for h in iw:  # regla 5: personas enteras N >= carga, N <= disponibles
+    carga = {(j, h): pulp.lpSum(d.req[d.ipos[c], j] * a[c, h] for c in todas if d.req[d.ipos[c], j] > 0)
+             for h in iw for j in range(len(RECURSOS))}
+    for h in iw:  # regla 5: la carga cabe en los presentes; N = techo(carga) (fase entera)
         for j, r in enumerate(RECURSOS):
-            prob += (pulp.lpSum(d.req[d.ipos[c], j] * a[c, h] for c in todas if d.req[d.ipos[c], j] > 0)
-                     <= Nv[j, h]), f"r5_{r}_{h}"
-    # cortes válidos: si una célula con carga fraccionaria está activa, hace falta al menos ceil(carga) personas
-    for h in iw:
-        for j, r in enumerate(RECURSOS):
-            for c in todas:
-                q = d.req[d.ipos[c], j]
-                if q > 1e-9 and math.ceil(q - 1e-9) > q + 1e-9:
-                    prob += Nv[j, h] >= math.ceil(q - 1e-9) * a[c, h], f"rN_{r}_{h}_{c}"
-    for si, (slots, dmin, tn, ft) in enumerate(d.turnos):  # P >= N en el turno
-        for j, r in enumerate(RECURSOS):
-            for h in slots:
-                prob += Pv[j, si] >= Nv[j, h], f"rP_{r}_{si}_{h}"
+            prob += carga[j, h] <= float(d.disp[h, j]), f"r5d_{r}_{h}"
+            if entero:
+                prob += carga[j, h] <= Nv[j, h], f"r5_{r}_{h}"
+                prob += Nv[j, h] <= carga[j, h] + 0.999, f"r5u_{r}_{h}"  # N no supera el techo de la carga
+                for c in todas:  # corte válido: carga fraccionaria activa => al menos ceil(carga) personas
+                    q = d.req[d.ipos[c], j]
+                    if q > 1e-9 and math.ceil(q - 1e-9) > q + 1e-9:
+                        prob += Nv[j, h] >= math.ceil(q - 1e-9) * a[c, h], f"rN_{r}_{h}_{c}"
     for ic, c in enumerate(prods):
         for h in range(H):
             prev = d.i0[ic] if h == 0 else I[c, h - 1]
             prob += I[c, h] == prev + d.cap[ic] * u[c, h] - d.env[h, ic], f"r6_{c}_{h}"  # regla 6
             prob += I[c, h] + sn[c, h] >= 0, f"r6b_{c}_{h}"  # stock >= 0 (pedido servido)
-            prob += I[c, h] >= d.ss[ic] - sh[c, h], f"r7_{c}_{h}"  # SS: consumible con penalización (F20)
-            if d.k > 0:
-                prob += sho[c, h] >= (1 + d.k) * d.ss[ic] - I[c, h], f"r9_{c}_{h}"  # regla 9
+            prob += I[c, h] >= d.ss[ic] - sh[c, h], f"r7_{c}_{h}"  # SS: consumible con penalización
             prev_a = 0 if h == 0 else a[c, h - 1]
             prob += st[c, h] >= a[c, h] - prev_a, f"r10_{c}_{h}"  # regla 10
-    # FLAG F18: condición terminal blanda: stock final >= SS + envíos de las horas siguientes
-    for ic, c in enumerate(prods):
-        prob += I[c, H - 1] >= d.ss[ic] + d.env_final[ic] - sf[c], f"term_{c}"
+    for k_, h in enumerate(d.cierres):  # I - óptimo = d+ - d-
+        for ic, c in enumerate(prods):
+            prob += I[c, h] - float(d.opt[k_, ic]) == dpos[c, k_] - dneg[c, k_], f"opt_{c}_{k_}"
     for h in range(H):  # regla 8
         prob += (pulp.lpSum(I[c, h] * (1.0 / d.dens[ic]) for ic, c in enumerate(prods) if d.dens[ic] > 0)
                  <= d.A + sa[h]), f"r8_{h}"
@@ -428,44 +440,39 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
                      pulp.lpSum(y[c] for c in todas if c not in S)) >= 1, f"corte_{j}"
 
     # --- objetivo ---
-    ir = [RECURSOS.index(r) for r in RECURSOS_R]
     im, ic_ = RECURSOS.index("mto"), RECURSOS.index("calidad")
-    # R = 0,7 media(P/disp turno) + 0,3 media(N/disp hora)
-    tp = [(j, si) for si, (slots, dmin, _, _) in enumerate(d.turnos) for j in ir if dmin[j] > 1e-9]
-    tn_ = [(j, h) for h in iw for j in ir if d.disp[h, j] > 1e-9]
-    expr_R = 0
-    if tp:
-        expr_R += PESO_PLANTILLA / len(tp) * pulp.lpSum(Pv[j, si] * (1.0 / d.turnos[si][1][j]) for j, si in tp)
-    if tn_:
-        expr_R += (1 - PESO_PLANTILLA) / len(tn_) * pulp.lpSum(Nv[j, h] * (1.0 / d.disp[h, j]) for j, h in tn_)
+    den_r = float(d.disp[iw].sum()) if len(iw) else 0.0
+    # R = fracción libre del personal presente = (ΣDisp - ΣN) / ΣDisp (N = carga en la fase relajada)
+    if den_r > 1e-9:
+        usado = (pulp.lpSum(Nv[j, h] for h in iw for j in range(len(RECURSOS))) if entero else
+                 pulp.lpSum(carga[j, h] for h in iw for j in range(len(RECURSOS))))
+        expr_R = 1.0 - usado * (1.0 / den_r)
+    else:
+        expr_R = 0
     terminos_q = []
     for h in iw:
         ks = [k for k in (im, ic_) if d.disp[h, k] > 1e-9]
         for k in ks:
-            terminos_q.append(Nv[k, h] * (1.0 / d.disp[h, k] / len(ks)))
+            terminos_q.append((Nv[k, h] if entero else carga[k, h]) * (1.0 / d.disp[h, k] / len(ks)))
     expr_Q = pulp.lpSum(terminos_q) * (1.0 / len(iw)) if len(iw) else 0
-    # término auxiliar: horas libres dentro de la plantilla, Σ (P - N) / disp (nivela la carga)
-    idle_terms = [(j, si, h) for si, (slots, dmin, _, _) in enumerate(d.turnos) for j in range(len(RECURSOS))
-                  if dmin[j] > 1e-9 for h in slots]
-    expr_idle = (pulp.lpSum((Pv[j, si] - Nv[j, h]) * (1.0 / d.turnos[si][1][j]) for j, si, h in idle_terms)
-                 * (PESO_IDLE / len(idle_terms)) if idle_terms else 0)
     expr_S = pulp.lpSum((1.0 / d.dens[ic]) / d.A / H * I[c, h]
                         for ic, c in enumerate(prods) for h in range(H) if d.dens[ic] > 0)
-    if d.k > 0 and prods:
-        expr_B = pulp.lpSum(sho[c, h] / (d.k * d.ss[ic]) / (len(prods) * H)
-                            for ic, c in enumerate(prods) for h in range(H))
+    if len(d.cierres) and prods:
+        expr_B = pulp.lpSum((dpos[c, k_] + dneg[c, k_]) * (1.0 / max(float(d.opt[k_, ic]), 1.0))
+                            / (len(prods) * len(d.cierres))
+                            for k_ in range(len(d.cierres)) for ic, c in enumerate(prods))
     else:
         expr_B = 0
     den_e = d.W.sum() * d.kw.sum() * d.fmax
     expr_E = (pulp.lpSum(d.f[h] * d.kw[d.ipos[c]] / den_e * u[c, h] for c in prods for h in range(H)
                          if d.kw[d.ipos[c]] > 0) if den_e > 0 else 0)
-    pen_hard = pulp.lpSum(sn[c, h] / d.ss[ic] for ic, c in enumerate(prods) for h in range(H)) + \
-        pulp.lpSum(sa[h] / d.A for h in range(H))
+    pen_espacio = pulp.lpSum(sa[h] / d.A for h in range(H))
+    pen_pedido = pulp.lpSum(sn[c, h] / d.ss[ic] for ic, c in enumerate(prods) for h in range(H))
     pen_ss = pulp.lpSum(sh[c, h] / d.ss[ic] for ic, c in enumerate(prods) for h in range(H))
     w = d.pesos
+    # jerarquía: pedido no servido >> stock bajo SS >> criterios (R, S, Q, B, E)
     prob += ESCALA_OBJ * (w["R"] * expr_R + w["S"] * expr_S + w["Q"] * expr_Q + w["B"] * expr_B + w["E"] * expr_E +
-                          expr_idle + PENALIZACION * pen_hard + d.pen_ss * pen_ss +
-                          PENALIZACION_FINAL * pulp.lpSum(sf[c] / d.ss[ic] for ic, c in enumerate(prods)) +
+                          PENALIZACION * pen_espacio + d.pen_pedido * pen_pedido + d.pen_ss * pen_ss +
                           PESO_ARRANQUES * pulp.lpSum(st.values())), "objetivo"
 
     # --- resolver (HiGHS vía highspy; gap y estado se leen del modelo nativo) ---
@@ -521,7 +528,7 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
     hol_n = float(sum((sn[c, h].value() or 0.0) for c in prods for h in range(H)))
     hol_a = float(sum((sa[h].value() or 0.0) for h in range(H)))
     estado = "OPTIMO" if optimo else "FACTIBLE"
-    if hol_n > TOL_HOLGURA or hol_a > TOL_HOLGURA:  # sólo stock < 0 o almacén > 800 m² descartan el plan
+    if hol_a > TOL_HOLGURA:  # sólo almacén > 800 m² (o reglas duras) descarta el plan; stock < 0 => CRITICO
         estado = "INVIABLE"
     plan = evaluar(esc, hz, pd.DataFrame(av, index=hz.slots.index, columns=todas),
                    pd.DataFrame(uv, index=hz.slots.index, columns=todas), estado=estado, gap=gap,
@@ -530,7 +537,7 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
     plan.tiempo_s = time.perf_counter() - t_ini
     if plan.viable and plan.gap is not None:
         # Margen máximo de mejora en puntos = 100 × (objetivo − cota del solver). Aproximado: supone que los
-        # términos auxiliares del objetivo (arranques, horas libres, cobertura final) se mantienen.
+        # término de arranques se mantiene.
         margen = 100.0 * plan.objetivo * plan.gap
         plan.kpis["margen_mejora_max"] = margen
         plan.kpis["puntuacion_max_teorica"] = min(100.0, plan.puntuacion + margen)

@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from .config import CELULA_LOGISTICA, DIAS_LABORABLES, RECURSOS, TURNOS
-from .datos import (Escenario, celulas_productivas, demanda_dia, disp_base, stock_inicial,
+from .config import CELULA_LOGISTICA, CIERRES_TURNO, DIAS_LABORABLES, RECURSOS, TURNOS
+from .datos import (Escenario, celulas_productivas, demanda_dia, disp_base, stock_inicial, stock_optimo,
                     tabla_celulas)
 
 
@@ -22,8 +22,10 @@ class Horizonte:
     - `envios`: piezas que salen en cada slot; índice = slot, columnas = células productivas.
     - `bloqueos`: célula -> conjunto de slots en los que no puede activarse (paradas y averías).
     - `camiones`: DataFrame `slot, fecha_hora, piezas_ve, piezas_comb, m2, n_camiones, real` (un ciclo por fila).
-    - `logistica_exigida`: por slot, si la célula 10 es obligatoria (F11/F14).
+    - `logistica_exigida`: por slot, si la célula 10 es obligatoria.
     - `stock_inicial`: stock de partida por célula usado al construir el horizonte (para encadenar eventos).
+    - `cierres`: slots cuyo final coincide con un cierre de turno laborable (06:00, 14:00, 22:00) dentro del horizonte;
+      `stock_optimo`: stock óptimo (SS + demanda diaria / 3 del día del turno que cierra) en cada cierre.
     """
     slots: pd.DataFrame
     envios: pd.DataFrame
@@ -32,8 +34,9 @@ class Horizonte:
     camiones: pd.DataFrame = field(default_factory=pd.DataFrame)
     logistica_exigida: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=bool))
     inicio: pd.Timestamp = None
-    envio_final: pd.Series = None  # piezas previstas a expedir en las `cobertura_final_h` horas tras el horizonte (F18)
     stock_inicial: dict = field(default_factory=dict)
+    cierres: list = field(default_factory=list)  # slots cuyo final es un cierre de turno laborable (06, 14, 22 h)
+    stock_optimo: pd.DataFrame = field(default_factory=pd.DataFrame)  # óptimo por cierre: índice = slot, cols = piezas
 
     @property
     def horas(self) -> int:
@@ -67,12 +70,12 @@ class Horizonte:
 
 
 def redondeo_comercial(x: float) -> int:
-    """Redondeo 'half up' (FLAG F17), no el bancario de Python."""
+    """Redondeo 'half up', no el bancario de Python."""
     return int(math.floor(x + 0.5))
 
 
 def turno_de_hora(hora: int) -> str:
-    """Código de turno (M/T/N) de una hora del día. FLAG F4."""
+    """Código de turno (M/T/N) de una hora del día. ."""
     for cod, (ini, fin) in TURNOS.items():
         if ini < fin and ini <= hora < fin:
             return cod
@@ -89,13 +92,13 @@ def _ciclos(esc: Escenario, t0: pd.Timestamp, t1: pd.Timestamp) -> list[dict]:
     d = (t0 - pd.Timedelta(days=1)).normalize()
     fin = t1.normalize()
     while d <= fin:
-        if d.weekday() in DIAS_LABORABLES:  # FLAG F4/F6: sin expediciones el fin de semana
+        if d.weekday() in DIAS_LABORABLES:  # sin expediciones el fin de semana
             ve, comb = demanda_dia(esc, d)
             for i in range(n):
                 t = d + pd.Timedelta(hours=primero + i * intervalo)
                 ciclos.append({"hora": t, "dia": d, "ve": ve / n, "comb": comb / n, "real": False})
         d += pd.Timedelta(days=1)
-    # Expediciones reales: sustituyen al ciclo previsto más cercano (FLAG F15)
+    # Expediciones reales: sustituyen al ciclo previsto más cercano
     for _, f in esc.expediciones.iterrows():
         if pd.isna(f["fecha_hora"]):
             continue
@@ -129,9 +132,7 @@ def construir_horizonte(esc: Escenario, inicio, horas=None) -> Horizonte:
     # fecha del turno: la noche de 00-06 pertenece al día anterior
     slots["fecha_turno"] = (slots["inicio"] - pd.to_timedelta(np.where(slots["hora"] < 6, 1, 0), unit="D")
                             ).dt.normalize()
-    slots["laborable"] = slots["fecha_turno"].dt.weekday.isin(DIAS_LABORABLES)  # FLAG F4
-
-    # FLAG F5: factor energético horario
+    slots["laborable"] = slots["fecha_turno"].dt.weekday.isin(DIAS_LABORABLES)  # # factor energético horario
     s_ini, s_fin = float(p["solar_ini"]), float(p["solar_fin"])
     f = np.ones(H)
     h = slots["hora"].to_numpy()
@@ -139,7 +140,7 @@ def construir_horizonte(esc: Escenario, inicio, horas=None) -> Horizonte:
     f[(h >= 22) | (h < 6)] = float(p["factor_noche"])
     slots["factor_energia"] = f
 
-    # Bloqueos y técnicos por paradas (FLAG F13); la célula 10 no puede pararse (FLAG F22)
+    # Bloqueos y técnicos por paradas; la célula 10 no puede pararse
     todas = [int(c) for c in esc.celulas["celula"]]
     bloqueos: dict[int, set] = {c: set() for c in todas}
     tecnicos = np.zeros(H)
@@ -170,13 +171,13 @@ def construir_horizonte(esc: Escenario, inicio, horas=None) -> Horizonte:
         for r in RECURSOS:
             base[r][i] = disp_base(esc, ft, tn, r)
             disp[r][i] = base[r][i]
-    disp["mto"] = np.maximum(0.0, disp["mto"] - tecnicos)  # FLAG F3
+    disp["mto"] = np.maximum(0.0, disp["mto"] - tecnicos)
     for r in RECURSOS:
         slots[f"{r}_disp"] = disp[r]
         slots[f"{r}_disp_base"] = base[r]
     slots["tecnicos"] = tecnicos
 
-    # Ciclos de expedición y envíos (FLAG F6)
+    # Ciclos de expedición y envíos
     prods = celulas_productivas(esc)
     t = tabla_celulas(esc)
     dens = t["piezas_m2"].astype(float)
@@ -184,17 +185,10 @@ def construir_horizonte(esc: Escenario, inicio, horas=None) -> Horizonte:
     m2_comb = float(sum(1.0 / dens[c] for c in prods if (not t.loc[c, "es_ve"]) and dens[c] > 0))
     m2max = float(p["m2_max_camion"])
 
-    # FLAG F18: envíos previstos tras el horizonte (para la condición terminal de stock)
-    cov = float(p.get("cobertura_final_h", 8))
-    t2 = t1 + pd.Timedelta(hours=cov)
-    lista = _ciclos(esc, t0, t2)
-    post_ve = post_comb = 0.0
+    lista = _ciclos(esc, t0, t1)
     filas = []
     for c in lista:
         m2 = c["ve"] * m2_ve + c["comb"] * m2_comb
-        if t1 <= c["hora"] < t2:
-            post_ve += c["ve"]
-            post_comb += c["comb"]
         if not (t0 <= c["hora"] < t1):
             continue
         n_cam = int(math.ceil(m2 / m2max - 1e-9)) if m2 > 1e-9 else 0  # techo de m²/15: los camiones que hagan falta
@@ -225,7 +219,7 @@ def construir_horizonte(esc: Escenario, inicio, horas=None) -> Horizonte:
         envios[c] = ve_slot if t.loc[c, "es_ve"] else comb_slot
     envios.index.name = "slot"
 
-    # Célula 10 obligatoria en horas laborables salvo recursos insuficientes (FLAG F11/F14)
+    # Célula 10 obligatoria en horas laborables salvo recursos insuficientes
     log = np.zeros(H, dtype=bool)
     if CELULA_LOGISTICA in t.index:
         req = t.loc[CELULA_LOGISTICA]
@@ -241,6 +235,15 @@ def construir_horizonte(esc: Escenario, inicio, horas=None) -> Horizonte:
         if faltan:
             alertas.append(f"La célula 10 (servicio logístico) no puede garantizarse en {len(faltan)} hora(s) "
                            f"laborable(s) por falta de recursos.")
-    envio_final = pd.Series({c: (post_ve if t.loc[c, "es_ve"] else post_comb) for c in prods}, dtype=float)
-    return Horizonte(slots=slots, envios=envios, envio_final=envio_final, bloqueos=bloqueos, alertas=alertas,
-                     camiones=cam, logistica_exigida=log, inicio=t0, stock_inicial=stock_inicial(esc))
+
+    # Cierres de turno laborables dentro del horizonte y stock óptimo en cada uno
+    cierres = [int(i) for i in range(H) if int(slots["fin"].iloc[i].hour) in CIERRES_TURNO
+               and bool(slots["laborable"].iloc[i]) and slots["fin"].iloc[i].minute == 0]
+    opt = pd.DataFrame(index=pd.Index(cierres, name="slot"), columns=prods, dtype=float)
+    for i in cierres:
+        o = stock_optimo(esc, slots["fecha_turno"].iloc[i])
+        for c in prods:
+            opt.at[i, c] = o[c]
+    return Horizonte(slots=slots, envios=envios, bloqueos=bloqueos, alertas=alertas,
+                     camiones=cam, logistica_exigida=log, inicio=t0, stock_inicial=stock_inicial(esc),
+                     cierres=cierres, stock_optimo=opt)

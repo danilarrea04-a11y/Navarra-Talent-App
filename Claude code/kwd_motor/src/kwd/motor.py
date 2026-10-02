@@ -1,4 +1,4 @@
-"""Orquestación: Top 1/2/3, plan de referencia, explicación (qué / por qué / impacto) y alertas."""
+"""Orquestación: Top 1/2/3, explicación (qué / por qué / impacto) y alertas (v3)."""
 from __future__ import annotations
 
 import time
@@ -7,8 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from .baseline import plan_referencia
-from .config import CELULA_LOGISTICA, FLAGS, NOMBRES_TURNO, RECURSOS, RECURSOS_R
+from .config import CELULA_LOGISTICA, NOMBRES_TURNO, RECURSOS, RECURSOS_R
 from .datos import Escenario, stock_inicial, ss_por_celula, tabla_celulas
 from .horizonte import Horizonte, construir_horizonte
 from .modelo import ModeloInfactible, preparar, resolver
@@ -19,20 +18,22 @@ IDONEIDAD_MIN_ALTERNATIVA = 50.0  # % mínimo para mostrar un Top 2/3
 
 @dataclass
 class Recomendacion:
-    """Resultado de `recomendar`: Top-K viables, contingencia (si no hay viable), baseline y explicación."""
+    """Resultado de `recomendar`: Top-K planes, plan inviable (si no hay ninguno) y explicación.
+
+    Un plan con pedidos sin servir es CRITICO (no inviable) y lleva `aviso_direccion`."""
     inicio: pd.Timestamp
     horizonte: Horizonte
     top: list
     contingencia: Plan | None
-    baseline: Plan
     explicacion: dict
     alertas: list
-    flags: dict = field(default_factory=lambda: dict(FLAGS))
     tiempo_total_s: float = 0.0
+    baseline: Plan | None = None  # obsoleto (v3): siempre None
+    aviso_direccion: str | None = None
 
     @property
     def mejor(self) -> Plan | None:
-        """Plan principal: Top 1 o, si no hay viables, el de contingencia."""
+        """Plan principal: Top 1 o, si no hay viables, el inviable."""
         return self.top[0] if self.top else self.contingencia
 
 
@@ -60,7 +61,7 @@ def _primer_incumplimiento_sin_produccion(d, hz, ic: int):
     return int(malos[0]) if len(malos) else None
 
 
-def _explicar(esc: Escenario, hz: Horizonte, plan: Plan, top: list, baseline: Plan) -> dict:
+def _explicar(esc: Escenario, hz: Horizonte, plan: Plan, top: list) -> dict:
     d = preparar(esc, hz)
     t = tabla_celulas(esc)
     s = hz.slots
@@ -96,7 +97,7 @@ def _explicar(esc: Escenario, hz: Horizonte, plan: Plan, top: list, baseline: Pl
                 motivo = (f"su pieza caería por debajo del stock de seguridad a las "
                           f"{s['inicio'].iloc[h1]:%H:%M} ({s['inicio'].iloc[h1]:%d/%m}) sin producir")
             else:
-                motivo = "repone el colchón de stock de seguridad (objetivo +10 %)"
+                motivo = "acerca el stock al óptimo de cierre de turno (SS + demanda de un turno)"
             bloq_futuro = [h for h in hz.bloqueos.get(c, set()) if h > turno_idx[-1]]
             if bloq_futuro:  # producción anticipada por mantenimiento/baja posterior
                 tb = s["turno"].iloc[min(bloq_futuro)]
@@ -121,22 +122,15 @@ def _explicar(esc: Escenario, hz: Horizonte, plan: Plan, top: list, baseline: Pl
         return {"puntuacion": p.puntuacion, "idoneidad": p.idoneidad, "estado": p.estado,
                 "horas_operario": k["operarios_horas"], "horas_picking": k["picking_horas"],
                 "horas_carretillero": k["carretilleros_horas"], "m2_medio": k["m2_medio"],
-                "desperdicio_personal_h": k["desperdicio_personal_h"], "camiones_dia": k["camiones_dia"],
-                "horas_libres_total": k["horas_libres_total"],
+                "horas_libres_total": k["horas_libres_total"], "camiones_dia": k["camiones_dia"],
                 "m2_pico": k["m2_pico"], "kwh_total": k["kwh_total"], "kwh_bruto": k["kwh_bruto"],
-                "kwh_solar_pct": k["kwh_solar_pct"], "demanda_cubierta_pct": k["demanda_cubierta_pct"]}
+                "kwh_solar_pct": k["kwh_solar_pct"], "demanda_cubierta_pct": k["demanda_cubierta_pct"],
+                "stock_opt_dev_media_pct": k.get("stock_opt_dev_media_pct")}
 
-    base = resumen(baseline)
-    impacto = {"plan": resumen(plan), "baseline": base, "alternativas": [resumen(p) for p in top[1:]]}
-    r = impacto["plan"]
-    impacto["delta_vs_baseline"] = {
-        "horas_operario": r["horas_operario"] - base["horas_operario"],
-        "m2_medio": r["m2_medio"] - base["m2_medio"],
-        "kwh_total": r["kwh_total"] - base["kwh_total"],
-        "puntuacion": r["puntuacion"] - base["puntuacion"],
-    }
+    impacto = {"plan": resumen(plan), "alternativas": [resumen(p) for p in top[1:]]}
     impacto["delta_vs_alternativas"] = [
-        {"nombre": p.nombre, "puntuacion": plan.puntuacion - p.puntuacion} for p in top[1:]]
+        {"nombre": p.nombre, "puntuacion": plan.puntuacion - p.puntuacion,
+         "horas_libres_total": plan.kpis["horas_libres_total"] - p.kpis["horas_libres_total"]} for p in top[1:]]
     return {"que": que, "porque": porque, "impacto": impacto, "turno_actual": nombre_turno}
 
 
@@ -147,19 +141,20 @@ def _alertas(esc: Escenario, hz: Horizonte, plan: Plan | None, top: list, contin
         return al
     d = preparar(esc, hz)
     s = hz.slots
+    if plan.aviso_direccion:
+        al.append("PLAN CRÍTICO: " + plan.aviso_direccion)
     if contingencia is not None:
-        al.append("PLAN INVIABLE: no existe configuración que cumpla todas las reglas obligatorias; se muestra "
-                  "un plan de contingencia (no recomendable).")
+        al.append("PLAN INVIABLE: no existe configuración que cumpla todas las reglas obligatorias (almacén, "
+                  "reglas de células); se muestra un plan de contingencia (no recomendable).")
         al.extend(f"Incumplimiento: {m}" for m in contingencia.incumplimientos[:8])
         if len(contingencia.incumplimientos) > 8:
             al.append(f"... y {len(contingencia.incumplimientos) - 8} incumplimientos más.")
     elif len(top) < top_k:
         al.append(f"Sólo se han encontrado {len(top)} configuraciones viables distintas (se pedían {top_k}).")
-    al.extend(plan.avisos)  # FLAG F18: condición terminal de stock
-    if (plan.stock.to_numpy() < (1 + d.k) * d.ss[None, :] - 1e-6).any():
-        malas = [c for c, v in zip(d.prods, (plan.stock.to_numpy() < (1 + d.k) * d.ss[None, :] - 1e-6).any(axis=0))
-                 if v]
-        al.append(f"Stock por debajo del colchón objetivo (SS +{d.k:.0%}) en las células {malas}.")
+    al.extend(plan.avisos)
+    if plan.kpis.get("stock_opt_dev_max_pct") is not None and plan.kpis["stock_opt_dev_max_pct"] > 25:
+        al.append(f"Stock lejos del óptimo en algún cierre de turno (desviación máxima "
+                  f"{plan.kpis['stock_opt_dev_max_pct']:.0f} %, media {plan.kpis['stock_opt_dev_media_pct']:.0f} %).")
     if plan.espacio.max() > 0.9 * d.A:
         al.append(f"Ocupación de almacén de producto terminado {100 * plan.espacio.max() / d.A:.0f} % "
                   f"(> 90 %).")
@@ -168,18 +163,14 @@ def _alertas(esc: Escenario, hz: Horizonte, plan: Plan | None, top: list, contin
         n = int(((u_ >= dp - 1e-9) & (dp > 0) & s["laborable"]).sum())
         if n:
             al.append(f"Recurso {r} al 100 % en {n} hora(s) del horizonte.")
-    for r in RECURSOS:  # A7: personal entero, fracciones sueltas
-        w = plan.kpis.get(f"desperdicio_{r}_h", 0.0)
-        if w > 1e-6:
-            al.append(f"Desperdicio de personal ({r}): {w:.1f} persona-hora(s) de fracción suelta en el horizonte.")
     if plan.kpis.get("horas_libres_total", 0) > 0:
-        al.append(f"Horas libres dentro de la plantilla: {plan.kpis['horas_libres_total']} persona-hora(s) "
-                  f"(personal del turno sin célula en esa hora).")
+        al.append(f"Horas libres del personal presente: {plan.kpis['horas_libres_total']:.0f} persona-hora(s) "
+                  f"sin tarea en el horizonte.")
     return al
 
 
 def recomendar(esc: Escenario, inicio, horas=None, top_k: int = 3, previo=None) -> Recomendacion:
-    """Calcula el Top-K de configuraciones viables, el plan de referencia y su explicación.
+    """Calcula el Top-K de configuraciones viables y su explicación.
 
     `previo`: asignación nominal de personal de la hora anterior (ver `personal.previo_de_plan`) para que los
     trabajadores mantengan su puesto al reconfigurar.
@@ -189,10 +180,9 @@ def recomendar(esc: Escenario, inicio, horas=None, top_k: int = 3, previo=None) 
     top: list[Plan] = []
     contingencia: Plan | None = None
     cortes: list = []
-    baseline = plan_referencia(esc, hz, previo=previo)
     for j in range(top_k):
         try:
-            plan = resolver(esc, hz, cortes, inicial=baseline.activacion if not cortes else None, previo=previo)
+            plan = resolver(esc, hz, cortes, previo=previo)
         except ModeloInfactible:
             break
         plan.nombre = f"Top {j + 1}"
@@ -203,28 +193,22 @@ def recomendar(esc: Escenario, inicio, horas=None, top_k: int = 3, previo=None) 
             break
         top.append(plan)
         cortes.append(frozenset(plan.config_turno_actual))
-    # KWD define Top 1 como la alternativa viable con mejor puntuación global: el objetivo del MILP
-    # incluye penalizaciones auxiliares (arranques, cobertura final), así que se reordena por puntuación.
-    top.sort(key=lambda p: p.puntuacion, reverse=True)
+    # Top 1 = menos piezas sin servir y, a igualdad, mejor puntuación global.
+    top.sort(key=lambda p: (round(p.kpis.get("piezas_no_servidas_total", 0.0)), -p.puntuacion))
     # Las alternativas (Top 2/3) cuya resolución quedó muy lejos del óptimo en el tiempo límite no se presentan:
     # compararían el Top 1 con planes que el solver no ha llegado a mejorar.
     descartadas = [p for p in top[1:] if p.idoneidad is not None and p.idoneidad < IDONEIDAD_MIN_ALTERNATIVA]
     top = top[:1] + [p for p in top[1:] if p not in descartadas]
     for j, p in enumerate(top):
         p.nombre = f"Top {j + 1}"
-    if not top and contingencia is None:
-        # Ni siquiera hay solución con holguras (p. ej. recursos obligatorios imposibles): se usa el
-        # plan de referencia como contingencia.
-        baseline.estado = "INVIABLE"
-        baseline.idoneidad = baseline.gap = None
-        contingencia = baseline
-        if not baseline.incumplimientos:
-            baseline.incumplimientos = ["El modelo no tiene solución con las reglas obligatorias."]
     principal = top[0] if top else contingencia
-    expl = _explicar(esc, hz, principal, top, baseline)
+    if principal is None:
+        raise ModeloInfactible("El modelo no tiene solución con las reglas obligatorias.")
+    expl = _explicar(esc, hz, principal, top)
     al = _alertas(esc, hz, principal, top, contingencia, top_k)
     if descartadas:
         al.append(f"Se han descartado {len(descartadas)} alternativa(s) cuya solución en el tiempo límite tenía una "
                   f"idoneidad inferior al {IDONEIDAD_MIN_ALTERNATIVA:.0f} %.")
     return Recomendacion(inicio=hz.inicio, horizonte=hz, top=top, contingencia=contingencia,
-                         baseline=baseline, explicacion=expl, alertas=al, tiempo_total_s=time.perf_counter() - t0)
+                         explicacion=expl, alertas=al, tiempo_total_s=time.perf_counter() - t0,
+                         aviso_direccion=principal.aviso_direccion)

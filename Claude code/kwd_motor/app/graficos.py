@@ -12,11 +12,11 @@ ROJO = "#C0392B"
 AMBAR = "#E0A100"
 GRIS = "#6B7280"
 COLOR_TIPO = {"VE": VERDE, "COMB": AZUL, "LOG": "#7A869A"}
-COLOR_ESTADO = {"OPTIMO": VERDE, "FACTIBLE": AMBAR, "INVIABLE": ROJO}
+COLOR_ESTADO = {"OPTIMO": VERDE, "FACTIBLE": AMBAR, "CRITICO": ROJO, "INVIABLE": ROJO}
 NOMBRE_REC = {"operarios": "Operarios", "picking": "Picking", "carretilleros": "Carretilleros",
               "mto": "Mantenimiento", "calidad": "Calidad"}
 NOMBRE_CRIT = {"R": "Recursos (50 %)", "S": "Espacio (20 %)", "Q": "Calidad + Mto (15 %)",
-               "B": "Stock seguridad (10 %)", "E": "Energía (5 %)"}
+               "B": "Stock óptimo (10 %)", "E": "Energía (5 %)"}
 COLOR_CRIT = {"R": NAVY, "S": "#5B6BC0", "Q": "#26A69A", "B": "#F4A300", "E": "#8D6E63"}
 
 
@@ -94,10 +94,11 @@ def contribuciones(plan):
     return fig
 
 
-def stock(rec, esc, plan, ss: dict, k: float):
+def stock(rec, esc, plan, ss: dict, opt: dict):
     cols = list(plan.stock.columns)
     hs = horas(rec)
     tp = tipos(esc)
+    cierres = [pd.Timestamp(f) - pd.Timedelta(hours=1) for _, f in _cierres(rec)]
     nc = 3
     nf = -(-len(cols) // nc)
     fig = make_subplots(rows=nf, cols=nc, subplot_titles=[f"Célula {int(c)} ({tp.get(int(c), '?')})" for c in cols],
@@ -108,10 +109,38 @@ def stock(rec, esc, plan, ss: dict, k: float):
                                  line=dict(color=COLOR_TIPO.get(tp.get(int(c)), AZUL), width=2),
                                  hovertemplate="%{x|%H:%M}: %{y:.0f} piezas<extra></extra>"), row=r, col=cc)
         fig.add_hline(y=ss[int(c)], line_dash="dash", line_color=ROJO, row=r, col=cc)
-        fig.add_hline(y=ss[int(c)] * (1 + k), line_dash="dot", line_color=AMBAR, row=r, col=cc)
+        fig.add_hline(y=opt[int(c)], line_dash="dot", line_color=AMBAR, row=r, col=cc)
+        for f in cierres:
+            fig.add_vline(x=f, line_dash="dot", line_color=GRIS, line_width=1, row=r, col=cc)
     fig.update_xaxes(tickformat="%H")
     fig.update_layout(height=230 * nf, margin=dict(l=10, r=10, t=40, b=10),
-                      title="Stock por pieza (rojo = stock de seguridad · ámbar = colchón)")
+                      title="Stock por pieza (rojo = stock de seguridad · ámbar = stock óptimo · gris = cierre de turno)")
+    return fig
+
+
+def _cierres(rec):
+    s = rec.horizonte.slots.reset_index(drop=True)
+    return [(i, pd.Timestamp(f)) for i, f in enumerate(s["fin"]) if pd.Timestamp(f).hour in (6, 14, 22)]
+
+
+def horas_libres_barras(hl: dict):
+    """Barras de horas libres por rol (hl = informes.horas_libres)."""
+    roles = list(hl["roles"])
+    fig = go.Figure(go.Bar(x=[NOMBRE_REC[r] for r in roles], y=[hl["roles"][r]["libres"] for r in roles],
+                           marker_color=AMBAR, text=[f"{hl['roles'][r]['libres']:.0f} h" for r in roles],
+                           textposition="outside"))
+    fig.update_layout(height=260, margin=dict(l=10, r=10, t=40, b=10), title="Horas libres por rol (horas-persona sin tarea)")
+    return fig
+
+
+def stock_vs_optimo(df):
+    """Desviación (%) respecto al stock óptimo por pieza y cierre de turno (df = informes.stock_vs_optimo)."""
+    fig = go.Figure()
+    for f, g in df.groupby("cierre"):
+        fig.add_trace(go.Bar(x=[f"C{int(c)}" for c in g["celula"]], y=g["desviacion_pct"], name=f"{pd.Timestamp(f):%d/%m %H:%M}"))
+    fig.update_layout(barmode="group", height=300, margin=dict(l=10, r=10, t=40, b=10),
+                      title="Desviación respecto al stock óptimo en los cierres de turno (%)",
+                      legend=dict(orientation="h", y=-0.2))
     return fig
 
 

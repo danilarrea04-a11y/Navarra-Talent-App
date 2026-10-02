@@ -1,4 +1,4 @@
-"""Horizonte rodante: eventos, reconfiguración, estado en tiempo real, contingencia y simulación semanal (v2)."""
+"""Horizonte rodante: eventos, reconfiguración, estado en tiempo real, contingencia y simulación semanal (v3)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,6 +11,7 @@ from .datos import (Escenario, _limites_turno, bajas_efectivas, ss_por_celula, s
 from .horizonte import turno_de_hora
 from .motor import Recomendacion, recomendar
 from .personal import celulas_de, previo_de_plan
+from .validador import agotamiento as _agotamiento
 
 TIPOS_EVENTO = ("parada_celula", "fin_parada", "baja_personal", "alta_personal", "correccion_demanda",
                 "expedicion_real", "stock_real",
@@ -78,7 +79,7 @@ def aplicar_evento(esc: Escenario, evento: Evento, ahora=None) -> Escenario:
             hasta = pd.Timestamp(d["hasta"]) if d.get("hasta") is not None else pd.NaT
             tp = str(d.get("tipo", "AVERIA")).upper().replace("Í", "I")
             tec = float(d.get("tecnicos", 0) or 0)
-        if int(d["celula"]) == CELULA_LOGISTICA:  # FLAG F22
+        if int(d["celula"]) == CELULA_LOGISTICA:
             e.avisos.append("Se ignora la parada/baja de la célula 10: el servicio logístico no puede pararse.")
             return e
         e.paradas = _anadir(e.paradas, {"celula": int(d["celula"]), "desde": desde, "hasta": hasta,
@@ -289,46 +290,18 @@ def _franjas(horas: list) -> str:
     return ", ".join(f"{_fmt_h(a)} a {_fmt_h(b + pd.Timedelta(hours=1))}" for a, b in grupos)
 
 
-def contingencia_celula(esc: Escenario, rec: Recomendacion, celula: int, desde, hasta=None) -> dict:
-    """Avería de una célula (≠ 10): recalcula desde `desde` y explica reubicación de personas y máquinas."""
-    celula = int(celula)
-    if celula == CELULA_LOGISTICA:
-        raise ValueError("La célula 10 no puede averiarse ni pararse.")
-    desde = pd.Timestamp(desde).floor("h")
-    ev = Evento("parada_celula", {"celula": celula, "desde": desde,
-                                  "hasta": pd.Timestamp(hasta) if hasta is not None else None, "tipo": "AVERIA",
-                                  "tecnicos": 0})
-    esc2, rec2 = reconfigurar(esc, rec, ev, desde)
-    hz1, hz2 = rec.horizonte, rec2.horizonte
-    p1, p2 = rec.mejor, rec2.mejor
-    # ventana común: desde `desde` hasta el fin del horizonte antiguo
-    fin_v = min(hz1.slots["fin"].iloc[-1], hz2.slots["fin"].iloc[-1])
-    horas = [h for h in hz2.slots["inicio"] if h < fin_v]
-    # máquinas
-    def act(plan, hz):
-        return {pd.Timestamp(i): plan.activacion.iloc[k] for k, i in enumerate(hz.slots["inicio"])}
-    a1, a2 = act(p1, hz1), act(p2, hz2)
-    filas = []
-    for c in sorted(p2.activacion.columns):
-        b = [h for h in horas if h in a1 and a1[h][c] > 0.5]
-        d_ = [h for h in horas if h in a2 and a2[h][c] > 0.5]
-        nuevas = [h for h in d_ if h not in b]
-        if c == celula or len(b) != len(d_):
-            filas.append({"celula": c, "horas_antes": len(b), "horas_despues": len(d_),
-                          "delta": len(d_) - len(b), "franjas_nuevas": _franjas(nuevas)})
-    maquinas = pd.DataFrame(filas, columns=["celula", "horas_antes", "horas_despues", "delta", "franjas_nuevas"])
-    activadas = {int(f["celula"]) for _, f in maquinas.iterrows() if f["delta"] > 0}
-    # reubicación de personas
+def _cambios_asignacion(p1, hz1, p2, hz2, horas, relevantes: set, excluir: set) -> pd.DataFrame:
+    """Reubicación: trabajadores cuya célula cambia entre el plan anterior y el nuevo (en las horas comunes)."""
     w1, w2 = _asignacion_por_slot(p1, hz1), _asignacion_por_slot(p2, hz2)
     por_persona: dict = {}
     for (w, h), (r, cel2) in w2.items():
-        if h not in horas or (w, h) not in w1:
+        if h not in horas or (w, h) not in w1 or w in excluir:
             continue
         cel1 = w1[(w, h)][1]
         if cel1 == cel2:
             continue
         cs1, cs2 = set(celulas_de(cel1)), set(celulas_de(cel2))
-        if celula in cs1 or (cs2 - cs1) & activadas:
+        if (cs1 & relevantes) or (cs2 & relevantes):
             por_persona.setdefault((w, r), []).append((h, cel1, cel2))
     filas = []
     for (w, r), lst in sorted(por_persona.items()):
@@ -342,59 +315,149 @@ def contingencia_celula(esc: Escenario, rec: Recomendacion, celula: int, desde, 
                           "desde": ini, "hasta": prev + pd.Timedelta(hours=1)})
             if h is not None:
                 ini, c1, c2, prev = h, x1, x2, h
-    reubic = pd.DataFrame(filas, columns=["persona", "rol", "de_celula", "a_celulas", "desde", "hasta"])
-    # agotamiento de la pieza
-    ss = ss_por_celula(esc2)[celula]
-    st0 = hz2.stock_inicial.get(celula, 0.0)
-    acum = st0 - np.cumsum(hz2.envios[celula].to_numpy())
-    ini2 = hz2.slots["inicio"]
+    return pd.DataFrame(filas, columns=["persona", "rol", "de_celula", "a_celulas", "desde", "hasta"])
 
-    def _inst(mask):
-        idx = np.where(mask)[0]
-        return pd.Timestamp(hz2.slots["fin"].iloc[idx[0]]) if len(idx) else None
-    h_ss, h_cero = _inst(acum < ss - 1e-9), _inst(acum < -1e-9)
-    lim = pd.Timestamp(hasta) if hasta is not None else None
-    if lim is not None:
-        h_ss = h_ss if (h_ss is not None and h_ss <= lim) else None
-        h_cero = h_cero if (h_cero is not None and h_cero <= lim) else None
-    agot = {"celula": celula, "hora_bajo_ss": h_ss, "hora_sin_stock": h_cero}
-    # resumen
+
+def contingencia(esc: Escenario, rec: Recomendacion, ahora, bajas_celulas: list | None = None,
+                 bajas_personas: list | None = None, bajas_rol: dict | None = None) -> dict:
+    """Contingencia con células averiadas y/o personas de baja: recalcula desde `ahora` (stock del plan vigente).
+
+    bajas_celulas: [{celula, desde, hasta}] (hasta None = hasta nuevo aviso; la célula 10 no puede averiarse);
+    bajas_personas: ids de trabajador ("T-OP04") o dicts {trabajador, fecha}; bajas_rol: {rol: cantidad} que se
+    restan a todos los turnos del horizonte. Devuelve rec_antes, rec_despues, reubicacion, maquinas, agotamiento
+    (DataFrame por pieza), desabastecimiento (DataFrame pieza, ciclo, piezas_no_servidas), aviso_direccion (str|None)
+    y resumen (list[str]); además `escenario` (con las incidencias aplicadas).
+    """
+    ahora = pd.Timestamp(ahora).floor("h")
+    bajas_celulas = list(bajas_celulas or [])
+    bajas_personas = list(bajas_personas or [])
+    for b in bajas_celulas:
+        if int(b["celula"]) == CELULA_LOGISTICA:
+            raise ValueError("La célula 10 no puede averiarse ni pararse.")
+    e2 = esc.copiar()
+    _fijar_stock(e2, stock_en(rec, ahora))
+    for b in bajas_celulas:
+        d0 = pd.Timestamp(b["desde"]).floor("h") if b.get("desde") is not None else ahora
+        e2 = aplicar_evento(e2, Evento("parada_celula", {
+            "celula": int(b["celula"]), "desde": d0,
+            "hasta": pd.Timestamp(b["hasta"]) if b.get("hasta") is not None else None,
+            "tipo": "AVERIA", "tecnicos": 0}), ahora)
+    for w in bajas_personas:
+        dat = dict(w) if isinstance(w, dict) else {"trabajador": str(w)}
+        e2 = aplicar_evento(e2, Evento("baja_personal", dat), ahora)
+    if bajas_rol:
+        t_ini = ahora
+        for i in range(int(esc.parametros["horas_horizonte"])):
+            t = t_ini + pd.Timedelta(hours=i)
+            if i == 0 or t.hour in (6, 14, 22):
+                for rol, cant in bajas_rol.items():
+                    if cant:
+                        e2 = aplicar_evento(e2, Evento("baja_personal", {
+                            "fecha": _fecha_turno_de(t), "turno": turno_de_hora(t.hour), "rol": rol,
+                            "cantidad": cant}), ahora)
+    n = int((ahora - rec.horizonte.inicio) / pd.Timedelta(hours=1))
+    previo = previo_de_plan(rec.horizonte, rec.mejor, max(0, min(n - 1, rec.horizonte.horas - 1)) if n > 0 else 0)
+    rec2 = recomendar(e2, ahora, top_k=1, previo=previo)
+    hz1, hz2 = rec.horizonte, rec2.horizonte
+    p1, p2 = rec.mejor, rec2.mejor
+    fin_v = min(hz1.slots["fin"].iloc[-1], hz2.slots["fin"].iloc[-1])
+    horas = [h for h in hz2.slots["inicio"] if h < fin_v]
+    celulas_rotas = sorted({int(b["celula"]) for b in bajas_celulas})
+
+    def act(plan, hz):
+        return {pd.Timestamp(i): plan.activacion.iloc[k] for k, i in enumerate(hz.slots["inicio"])}
+    a1, a2 = act(p1, hz1), act(p2, hz2)
+    filas = []
+    for c in sorted(p2.activacion.columns):
+        b = [h for h in horas if h in a1 and a1[h][c] > 0.5]
+        d_ = [h for h in horas if h in a2 and a2[h][c] > 0.5]
+        nuevas = [h for h in d_ if h not in b]
+        if c in celulas_rotas or len(b) != len(d_):
+            filas.append({"celula": c, "horas_antes": len(b), "horas_despues": len(d_),
+                          "delta": len(d_) - len(b), "franjas_nuevas": _franjas(nuevas)})
+    maquinas = pd.DataFrame(filas, columns=["celula", "horas_antes", "horas_despues", "delta", "franjas_nuevas"])
+    activadas = {int(f["celula"]) for _, f in maquinas.iterrows() if f["delta"] > 0}
+    # células que cubría cada persona de baja (según el plan anterior)
+    ausentes = {}
+    w1 = _asignacion_por_slot(p1, hz1)
+    for w in bajas_personas:
+        wid = w["trabajador"] if isinstance(w, dict) else str(w)
+        cels = set()
+        for (x, h), (r, cel) in w1.items():
+            if x == wid and h in horas:
+                cels |= set(celulas_de(cel))
+        ausentes[wid] = cels
+    relevantes = set(celulas_rotas) | activadas | {c for cs in ausentes.values() for c in cs}
+    reubic = _cambios_asignacion(p1, hz1, p2, hz2, horas, relevantes, set(ausentes))
+    # agotamiento / desabastecimiento (del plan nuevo)
+    ag = p2.agotamiento.copy()
+    ag = ag.rename(columns={"pieza": "celula"}) if False else ag
+    des = p2.desabastecimiento.copy()
+    aviso = p2.aviso_direccion
+    # resumen en lenguaje de planta
     res = []
-    hasta_txt = f"hasta {pd.Timestamp(hasta):%d/%m %H:%M}" if hasta is not None else "hasta nuevo aviso"
-    res.append(f"Avería de la célula {celula} desde {desde:%d/%m %H:%M} {hasta_txt}.")
+    for b in bajas_celulas:
+        hasta_txt = f"hasta {pd.Timestamp(b['hasta']):%d/%m %H:%M}" if b.get("hasta") is not None else "hasta nuevo aviso"
+        d0 = pd.Timestamp(b["desde"]) if b.get("desde") is not None else ahora
+        res.append(f"Avería de la célula {int(b['celula'])} desde {d0:%d/%m %H:%M} {hasta_txt}.")
+    for wid in ausentes:
+        cs = ", ".join(f"C{c}" for c in sorted(ausentes[wid])) or "sin célula asignada"
+        res.append(f"Baja de {wid} (cubría: {cs}).")
+    for rol, cant in (bajas_rol or {}).items():
+        if cant:
+            res.append(f"Baja de {cant:g} {_NOMBRE_ROL.get(rol, (rol, rol))[1]} en los turnos del horizonte.")
     if len(reubic):
-        for r, g in reubic[reubic["de_celula"].str.contains(f"C{celula}(?!\\d)", regex=True)].groupby("rol"):
-            pers = g["persona"].unique()
-            destinos = "; ".join(f"{x['persona']} → {x['a_celulas']} ({_fmt_h(x['desde'])}-{_fmt_h(x['hasta'])})"
-                                 for _, x in g.iterrows())
-            singular, plural = _NOMBRE_ROL.get(r, (f"trabajador de {r}", f"trabajadores de {r}"))
-            if len(pers) == 1:
-                res.append(f"El {singular} de la C{celula} pasa a: {destinos}.")
-            else:
-                res.append(f"Los {len(pers)} {plural} de la C{celula} pasan a: {destinos}.")
-        otros = reubic[~reubic["de_celula"].str.contains(f"C{celula}(?!\\d)", regex=True)]
-        for _, x in otros.iterrows():
-            res.append(f"{x['persona']} cambia de {x['de_celula']} a {x['a_celulas']} "
-                       f"({_fmt_h(x['desde'])}-{_fmt_h(x['hasta'])}).")
+        for c in celulas_rotas:
+            g_c = reubic[reubic["de_celula"].str.contains(f"C{c}(?!\\d)", regex=True)]
+            for r, g in g_c.groupby("rol"):
+                pers = g["persona"].unique()
+                filas_d = [f"{x['persona']} → {x['a_celulas'] or 'LIBRE'} ({_fmt_h(x['desde'])}-{_fmt_h(x['hasta'])})"
+                           for _, x in g.iterrows()]
+                destinos = "; ".join(filas_d[:4]) + (f"; y {len(filas_d) - 4} cambios más" if len(filas_d) > 4 else "")
+                singular, plural = _NOMBRE_ROL.get(r, (f"trabajador de {r}", f"trabajadores de {r}"))
+                res.append(f"El {singular} de la C{c} pasa a: {destinos}." if len(pers) == 1
+                           else f"Los {len(pers)} {plural} de la C{c} pasan a: {destinos}.")
+        patron = "|".join(f"C{c}(?!\\d)" for c in celulas_rotas)
+        otros = reubic[~reubic["de_celula"].str.contains(patron, regex=True)] if patron else reubic
+        if len(otros):
+            res.append(f"Otros {len(otros)} cambios de puesto de {otros['persona'].nunique()} personas "
+                       f"(detalle en la tabla de reubicación).")
     else:
-        res.append(f"La célula {celula} no tenía personal asignado en ese intervalo: no hay personas que reubicar.")
+        res.append("No hay personas que reubicar.")
     for _, m in maquinas.iterrows():
-        if int(m["celula"]) == celula:
+        if int(m["celula"]) in celulas_rotas:
             continue
         if m["franjas_nuevas"]:
             verbo = "Activar" if m["horas_antes"] == 0 else "Ampliar"
             res.append(f"{verbo} C{int(m['celula'])} de {m['franjas_nuevas']}.")
-    if h_cero is not None:
-        res.append(f"La pieza {celula} cubre pedidos hasta las {_fmt_h(h_cero)}; reparar antes de ese momento.")
-    elif h_ss is not None:
-        res.append(f"La pieza {celula} cubre pedidos todo el horizonte pero baja del stock de seguridad a las "
-                   f"{_fmt_h(h_ss)}; conviene reparar antes.")
+    if len(ag):
+        for _, x in ag.iterrows():
+            t = f"La pieza {int(x['pieza'])} consume stock de seguridad desde las {_fmt_h(x['hora_bajo_ss'])}"
+            if pd.notna(x["hora_sin_stock"]):
+                t += f" y se queda sin stock a las {_fmt_h(x['hora_sin_stock'])}"
+            if pd.notna(x["hora_repone_ss"]):
+                t += f"; repone el SS a las {_fmt_h(x['hora_repone_ss'])}"
+            else:
+                t += "; no repone el SS en el horizonte"
+            res.append(t + ".")
     else:
-        res.append(f"La pieza {celula} mantiene su stock sobre el stock de seguridad durante la avería.")
+        res.append("El stock de seguridad no se consume: todas las piezas se mantienen por encima del SS.")
+    k2 = p2.kpis
+    if k2.get("stock_opt_dev_media_pct") is not None:
+        res.append(f"Stock vs óptimo al cierre de turno: desviación media {k2['stock_opt_dev_media_pct']:.0f} %, "
+                   f"máxima {k2['stock_opt_dev_max_pct']:.0f} %.")
+    if aviso:
+        res.append(aviso)
     if rec2.contingencia is not None:
-        res.append("Aviso: con la avería el plan resultante es INVIABLE (hay pedidos sin servir o reglas duras rotas).")
+        res.append("Aviso: el plan resultante es INVIABLE (almacén o reglas duras).")
     return {"rec_antes": rec, "rec_despues": rec2, "reubicacion": reubic, "maquinas": maquinas,
-            "agotamiento": agot, "resumen": res, "escenario": esc2}
+            "agotamiento": ag, "desabastecimiento": des, "aviso_direccion": aviso, "resumen": res,
+            "escenario": e2}
+
+
+def contingencia_celula(esc: Escenario, rec: Recomendacion, celula: int, desde, hasta=None) -> dict:
+    """Atajo: avería de una célula (≠ 10) desde `desde`."""
+    return contingencia(esc, rec, desde, bajas_celulas=[{"celula": int(celula), "desde": desde, "hasta": hasta}])
 
 
 def simular_semana(esc: Escenario, lunes, iteraciones: int = 15) -> pd.DataFrame:
@@ -413,7 +476,7 @@ def simular_semana(esc: Escenario, lunes, iteraciones: int = 15) -> pd.DataFrame
         fila.update({
             "iteracion": it + 1, "estado": plan.estado, "idoneidad": plan.idoneidad,
             "puntuacion_plan_24h": plan.puntuacion, "configuracion": list(plan.config_turno_actual),
-            "puntuacion_baseline": rec.baseline.puntuacion, "tiempo_s": rec.tiempo_total_s,
+            "tiempo_s": rec.tiempo_total_s,
         })
         filas.append(fila)
         _fijar_stock(e, {int(c): float(v) for c, v in plan.stock.iloc[idx[-1]].items()})
