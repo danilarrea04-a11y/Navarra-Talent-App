@@ -1,0 +1,8 @@
+# Entorno virtual: se recrea con kwd_motor/instalar.bat
+.venv/
+# Cachés de Python y pytest
+__pycache__/
+*.pyc
+.pytest_cache/
+# Configuración local de Claude Code
+.claude/
