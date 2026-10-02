@@ -6,3 +6,6 @@ __pycache__/
 .pytest_cache/
 # Configuración local de Claude Code
 .claude/
+# Perfiles de rendimiento
+prof.out
+*.prof
