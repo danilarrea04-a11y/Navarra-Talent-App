@@ -337,8 +337,8 @@ if st.session_state.msg:
 rec = st.session_state.rec
 esc = st.session_state.esc
 
-NOM_TABS = ["Datos", "Planta en tiempo real", "Trabajadores", "Recomendación", "KPIs", "Overview 24 h", "Alternativas",
-            "Contingencia", "Semana"]
+NOM_TABS = ["Datos", "Recomendación", "Overview 24 h", "Contingencia", "Planta en tiempo real", "KPIs", "Trabajadores",
+            "Alternativas", "Semana"]
 _tabs = st.tabs(NOM_TABS)
 T = dict(zip(NOM_TABS, _tabs))
 
@@ -366,16 +366,16 @@ with T["Datos"]:
         sk = f"{lunes_p:%Y%m%d}_{ev}"
         st.markdown(f"**Demanda semanal** (semana del lunes {lunes_p:%d/%m/%Y}, piezas de cada referencia del tipo)")
         w1, w2 = st.columns(2)
-        sem_ve = w1.number_input("Piezas VE / semana", min_value=0.0, step=100.0,
-                                 value=float(_fs["piezas_ve"].iloc[-1]) if len(_fs) else 0.0, key=f"dem_sem_ve_{sk}")
-        sem_cb = w2.number_input("Piezas COMB / semana", min_value=0.0, step=100.0,
-                                 value=float(_fs["piezas_comb"].iloc[-1]) if len(_fs) else 0.0, key=f"dem_sem_cb_{sk}")
+        sem_ve = w1.number_input("Piezas VE / semana", min_value=0, step=100, format="%d",
+                                 value=int(round(float(_fs["piezas_ve"].iloc[-1]))) if len(_fs) else 0, key=f"dem_sem_ve_{sk}")
+        sem_cb = w2.number_input("Piezas COMB / semana", min_value=0, step=100, format="%d",
+                                 value=int(round(float(_fs["piezas_comb"].iloc[-1]))) if len(_fs) else 0, key=f"dem_sem_cb_{sk}")
         st.markdown(f"**Demanda corregida del día** ({dia_p:%d/%m/%Y}; 0 = sin corrección)")
         d1, d2 = st.columns(2)
-        dia_ve = d1.number_input("Piezas VE (día)", min_value=0.0, step=10.0,
-                                 value=float(_fc["piezas_ve"].iloc[-1]) if len(_fc) else 0.0, key=f"dem_dia_ve_{sk}")
-        dia_cb = d2.number_input("Piezas COMB (día)", min_value=0.0, step=10.0,
-                                 value=float(_fc["piezas_comb"].iloc[-1]) if len(_fc) else 0.0, key=f"dem_dia_cb_{sk}")
+        dia_ve = d1.number_input("Piezas VE (día)", min_value=0, step=10, format="%d",
+                                 value=int(round(float(_fc["piezas_ve"].iloc[-1]))) if len(_fc) else 0, key=f"dem_dia_ve_{sk}")
+        dia_cb = d2.number_input("Piezas COMB (día)", min_value=0, step=10, format="%d",
+                                 value=int(round(float(_fc["piezas_comb"].iloc[-1]))) if len(_fc) else 0, key=f"dem_dia_cb_{sk}")
         st.caption("Si un día tiene demanda corregida se usa esa; si no, la demanda semanal / 5.")
     with t_baj:
         st.caption("Personas de baja de cada rol en cada turno (sin fila: se aplica el absentismo estándar).")
@@ -471,7 +471,7 @@ with T["Datos"]:
 if rec is None:
     with T["Planta en tiempo real"]:
         st.info("Revisa los datos en la pestaña **Datos** y pulsa **Calcular plan** en la barra lateral.")
-    for n_ in NOM_TABS[2:]:
+    for n_ in [n for n in NOM_TABS if n not in ("Datos", "Planta en tiempo real")]:
         with T[n_]:
             st.info("Calcula primero un plan para ver esta sección.")
     st.stop()
@@ -727,6 +727,27 @@ with T["Trabajadores"]:
 
 # ------------------------------------------------------------------ 3. Recomendación
 with T["Recomendación"]:
+    st.markdown("#### Informe PDF para dirección")
+    st.caption("Incluye resumen ejecutivo, aviso para la dirección (si hay desabastecimiento), células y personal del turno, "
+               "camiones por ciclo, horas libres, stock frente al óptimo, KPIs, alternativas, contingencia (si procede), "
+               "gráficos y alertas.")
+    if st.button("Generar informe PDF", type="primary", key="gen_pdf"):
+        try:
+            with st.spinner("Generando informe…"):
+                ruta = Path(tempfile.mkdtemp()) / "informe_kwd.pdf"
+                ct = st.session_state.cont
+                informes.generar_informe_pdf(rec, esc, str(ruta),
+                                             contingencia=(ct["res"] if ct and ct.get("aplicada") else None))
+                st.session_state.pdf = ruta.read_bytes()
+        except Exception as e:  # noqa: BLE001
+            st.error(f"No se pudo generar el informe: {e}")
+            with st.expander("Detalle técnico"):
+                st.code(traceback.format_exc())
+    if st.session_state.pdf:
+        st.success("Informe generado.")
+        st.download_button("Descargar informe PDF", st.session_state.pdf,
+                           file_name=f"informe_kwd_{pd.Timestamp(rec.inicio):%Y%m%d_%H%M}.pdf", mime="application/pdf")
+    st.divider()
     inicio_rec = pd.Timestamp(rec.inicio)
     st.subheader(f"Turno {NOMBRE_TURNO.get(turno_de(rec), turno_de(rec))} · desde {inicio_rec:%d/%m/%Y %H:%M}")
     if AVISO:
@@ -839,8 +860,6 @@ with T["KPIs"]:
             cols = st.columns(4)
             for col, (n, v) in zip(cols, items[n0:n0 + 4]):
                 col.metric(n, v)
-    if HL["roles"]:
-        pc(G.horas_libres_barras(HL), width="stretch")
     pc(G.recursos(rec, plan), width="stretch")
     pc(G.almacen(rec, plan), width="stretch")
     pc(G.energia(rec, plan), width="stretch")
@@ -860,27 +879,6 @@ with T["Overview 24 h"]:
 
 # ------------------------------------------------------------------ 6. Alternativas
 with T["Alternativas"]:
-    st.markdown("#### Informe PDF para dirección")
-    st.caption("Incluye resumen ejecutivo, aviso para la dirección (si hay desabastecimiento), células y personal del turno, "
-               "camiones por ciclo, horas libres, stock frente al óptimo, KPIs, alternativas, contingencia (si procede), "
-               "gráficos y alertas.")
-    if st.button("Generar informe PDF", type="primary", key="gen_pdf"):
-        try:
-            with st.spinner("Generando informe…"):
-                ruta = Path(tempfile.mkdtemp()) / "informe_kwd.pdf"
-                ct = st.session_state.cont
-                informes.generar_informe_pdf(rec, esc, str(ruta),
-                                             contingencia=(ct["res"] if ct and ct.get("aplicada") else None))
-                st.session_state.pdf = ruta.read_bytes()
-        except Exception as e:  # noqa: BLE001
-            st.error(f"No se pudo generar el informe: {e}")
-            with st.expander("Detalle técnico"):
-                st.code(traceback.format_exc())
-    if st.session_state.pdf:
-        st.success("Informe generado.")
-        st.download_button("Descargar informe PDF", st.session_state.pdf,
-                           file_name=f"informe_kwd_{pd.Timestamp(rec.inicio):%Y%m%d_%H%M}.pdf", mime="application/pdf")
-    st.divider()
     st.subheader("Top 1/2/3")
     opciones = [(f"Top {i + 1}", p) for i, p in enumerate(rec.top)]
     if rec.contingencia is not None and not rec.top:
@@ -1108,10 +1106,45 @@ with T["Semana"]:
                 st.code(traceback.format_exc())
     sem = st.session_state.semana
     if isinstance(sem, pd.DataFrame) and len(sem):
-        st.dataframe(sem, width="stretch")
         import plotly.express as px
+        cols_prod = [c for c in sem.columns if str(c).startswith("prod_C")]
+        cols_stock = [c for c in sem.columns if str(c).startswith("stock_C")]
+        _dias = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+        etiqueta = (pd.to_datetime(sem["fecha_turno"]).map(lambda f: f"{_dias[f.weekday()]} {f:%d/%m}") + " "
+                    + sem["turno"].astype(str) if "fecha_turno" in sem and "turno" in sem else sem.index.astype(str))
+        tipo_cel = {int(r["celula"]): ("VE" if str(r["tipo"]).upper().startswith(("VE", "EL")) else "COMB")
+                    for _, r in esc.celulas.iterrows()}
+        st.dataframe(sem.drop(columns=cols_prod + cols_stock), width="stretch")
+        if cols_prod:
+            st.markdown("#### Producción por turno (piezas)")
+            prod = sem[cols_prod].copy()
+            prod.columns = [c.replace("prod_", "") for c in cols_prod]
+            prod.index = etiqueta
+            tot = pd.DataFrame({
+                "VE": prod[[c for c in prod.columns if tipo_cel.get(int(c[1:])) == "VE"]].sum(axis=1),
+                "COMB": prod[[c for c in prod.columns if tipo_cel.get(int(c[1:])) == "COMB"]].sum(axis=1)})
+            fig = px.bar(tot, x=tot.index, y=["VE", "COMB"], barmode="stack",
+                         color_discrete_map={"VE": G.COLOR_TIPO.get("VE", "#2E9E5B"), "COMB": G.COLOR_TIPO.get("COMB", NAVY)},
+                         labels={"value": "Piezas", "x": "Turno", "variable": "Tipo"},
+                         title="Piezas producidas por turno (suma de referencias)")
+            fig.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
+            pc(fig, width="stretch")
+            st.dataframe(prod.round(0).astype(int), width="stretch")
+        if cols_stock:
+            st.markdown("#### Stock al final de cada turno (piezas por referencia)")
+            stk = sem[cols_stock].copy()
+            stk.columns = [c.replace("stock_", "") for c in cols_stock]
+            stk.index = etiqueta
+            largo = stk.reset_index(names="Turno").melt(id_vars="Turno", var_name="Célula", value_name="Stock")
+            largo["Tipo"] = largo["Célula"].map(lambda c: tipo_cel.get(int(c[1:]), "COMB"))
+            fig = px.line(largo, x="Turno", y="Stock", color="Célula", facet_row="Tipo", markers=True,
+                          title="Evolución del stock por pieza a lo largo de la semana")
+            fig.update_layout(height=560, margin=dict(l=10, r=10, t=50, b=10))
+            fig.update_yaxes(matches=None)
+            pc(fig, width="stretch")
+            st.dataframe(stk.round(0).astype(int), width="stretch")
         num = sem.select_dtypes("number")
-        for c in [c for c in num.columns if any(s in c.lower() for s in ("puntuacion", "puntuación", "m2", "m²", "kwh", "libres"))][:4]:
+        for c in [c for c in num.columns if any(s in c.lower() for s in ("puntuacion", "puntuación", "m2", "m²", "kwh"))][:3]:
             x = sem["turno"].astype(str) if "turno" in sem else sem.index.astype(str)
             fig = px.bar(sem, x=x, y=c, title=c.replace("_", " ").capitalize(), color_discrete_sequence=[NAVY])
             fig.update_layout(height=280, margin=dict(l=10, r=10, t=40, b=10))

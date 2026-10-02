@@ -483,6 +483,10 @@ def simular_semana(esc: Escenario, lunes, iteraciones: int = 15, progreso=None) 
             "puntuacion_plan_24h": plan.puntuacion, "configuracion": list(plan.config_turno_actual),
             "tiempo_s": rec.tiempo_total_s,
         })
+        # producción del turno y stock al final del turno de cada pieza (para la vista semanal)
+        for c in plan.stock.columns:
+            fila[f"prod_C{int(c)}"] = float(plan.produccion[c].iloc[idx].sum()) if c in plan.produccion else 0.0
+            fila[f"stock_C{int(c)}"] = float(plan.stock[c].iloc[idx[-1]])
         filas.append(fila)
         _fijar_stock(e, {int(c): float(v) for c, v in plan.stock.iloc[idx[-1]].items()})
         inicio = inicio + pd.Timedelta(hours=len(idx))
