@@ -61,8 +61,8 @@ C_SOLAR = "#FFE9A8"
 C_ROJO = "#C0392B"
 C_AMBAR = "#E08A00"
 SALIDA = RAIZ / "salida" / "KWD_Informe_Tecnico.pdf"
-FECHA_DOC = "2 de octubre de 2026"
-VERSION = "v3"
+FECHA_DOC = "3 de octubre de 2026"
+VERSION = "v3 final"
 
 # ------------------------------------------------------------------------------------- fuentes
 _ttf = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
@@ -463,15 +463,15 @@ def g_contrib(planes, nombres, ruta):
             if v > 4:
                 ax.text(izq + v / 2, i, fm(v, 1), ha="center", va="center", color="white", fontsize=7.5)
             izq += v
-        ax.text(izq + 0.8, i, f"{fm(p.puntuacion, 2)} pts", va="center", fontsize=8, fontweight="bold",
+        ax.text(izq + 0.8, i, f"{fm(p.puntuacion, 2)}", va="center", fontsize=8, fontweight="bold",
                 color=NAVY_HEX)
     ax.set_yticks(range(len(nombres)))
     ax.set_yticklabels(nombres, fontsize=7.5)
     ax.invert_yaxis()
     ax.set_xlim(0, 100)
-    ax.set_xlabel("Contribución a la puntuación: 100·peso·(1 − componente); máximo 100 = 50+20+15+10+5")
+    ax.set_xlabel("Contribución al Índice KWD: 100·peso·(1 − componente); máximo 100 = 50+20+15+10+5")
     ax.legend(ncol=5, frameon=False, fontsize=7.2, loc="upper center", bbox_to_anchor=(0.5, -0.4))
-    ax.set_title("Contribución de cada criterio KWD a la puntuación", loc="left")
+    ax.set_title("Contribución de cada criterio KWD al Índice KWD", loc="left")
     fig_.tight_layout()
     fig_.savefig(ruta, dpi=150)
     plt.close(fig_)
@@ -555,7 +555,7 @@ def seccion_portada(X, D):
     E = []
     portada = Table([[[Spacer(1, 3.6 * cm), P("Informe técnico", "titulo"), Spacer(1, 0.3 * cm),
                        P("Motor de decisión de producción — KWD España", "sub"), Spacer(1, 0.9 * cm),
-                       P("Supuestos, trabajo realizado y metodología interna del algoritmo (versión v3)", "sub"),
+                       P("Supuestos, trabajo realizado y metodología interna del algoritmo (versión v3 final)", "sub"),
                        Spacer(1, 3.2 * cm), P("Navarra Talent Challenge 2026", "sub"),
                        P(f"Versión {VERSION} · {FECHA_DOC}", "sub"), Spacer(1, 0.6 * cm),
                        P("Equipo NTC26 con asistencia de IA", "sub"), Spacer(1, 2.6 * cm)]]], colWidths=[17 * cm])
@@ -563,7 +563,7 @@ def seccion_portada(X, D):
                                  ("RIGHTPADDING", (0, 0), (-1, -1), 1.2 * cm), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
     E += [portada, Spacer(1, 0.6 * cm),
           caja("<b>Naturaleza del documento.</b> Informe técnico de referencia del motor de decisión desarrollado para "
-               "el reto KWD, actualizado a la <b>versión v3</b> de la aplicación. Recoge <b>(A)</b> las decisiones y "
+               "el reto KWD, actualizado a la <b>versión final (v3)</b> de la aplicación. Recoge <b>(A)</b> las decisiones y "
                "supuestos, <b>(B)</b> el trabajo realizado y <b>(C)</b> la metodología interna del algoritmo. La fuente "
                "de verdad es el <b>código</b>; donde la documentación previa difiere del código se indica "
                "expresamente (anexo B). Las cifras del ejemplo numérico se calculan al generar el PDF, ejecutando el "
@@ -578,7 +578,7 @@ def seccion_portada(X, D):
     E += [Paragraph("Ficha del documento", S["h1x"])]
     ficha = [["Campo", "Contenido"],
              ["Título", "Informe técnico del motor de decisión de producción KWD (supuestos, trabajo realizado y metodología)"],
-             ["Versión", f"{VERSION} (aplicación v3)"],
+             ["Versión", f"{VERSION} (aplicación v3, versión final)"],
              ["Fecha", FECHA_DOC],
              ["Autores", "Equipo NTC26 con asistencia de IA"],
              ["Proyecto", "Reto KWD España S.L.U. · Navarra Talent Challenge 2026"],
@@ -591,12 +591,12 @@ def seccion_portada(X, D):
     E += [tabla(ficha, [3.6 * cm, 13.4 * cm], ["L", "L"]), Spacer(1, 8)]
     E += [Paragraph("Convenciones del documento", S["h2x"])]
     E += bullets([
-        f"<b>Identificadores.</b> {K('D1…D17')}: decisiones del equipo; {K('S1…S30')}: supuestos (decisiones de modelado "
+        f"<b>Identificadores.</b> {K('D1…D22')}: decisiones del equipo; {K('S1…S31')}: supuestos (decisiones de modelado "
         f"o de implementación que el código asume, con su estado de validación).",
         "<b>Referencias al código.</b> Toda mecánica se cita como " + K("modulo.funcion") + " (p. ej. " + K("modelo.resolver") + ").",
         "<b>Notación.</b> C = células (16), P = C ∖ {10} = células productivas (15), H = slots horarios (24), W ⊆ H = slots laborables, "
-        "T ⊆ H = cierres de turno; c = célula, h = slot, k = rol. Los componentes de la puntuación R, S, Q, B, E están "
-        "normalizados en [0, 1] y menor es mejor.",
+        "T ⊆ H = cierres de turno; c = célula, h = slot, k = rol. Los componentes del Índice KWD R, S, Q, B, E están "
+        "normalizados en [0, 1] y menor es mejor. El Índice KWD (antes «puntuación») es el valor 0–100 que resume los cinco componentes.",
         "<b>Formato numérico.</b> Coma decimal y punto de millar. Las horas son hora local sin zona.",
     ])
     E += [PageBreak()]
@@ -624,14 +624,14 @@ def seccion_resumen(X, D):
             "Top-K, asignación nominal de personal, validador, contingencia y aviso a dirección (§5); ejemplo numérico, "
             "validación y limitaciones (§6–§7). El anexo B recoge las diferencias entre la documentación y el código.")]
     kp = [["Resultado (demo 02/10/2026, kwd.datos.estado_ejemplo)", "Valor"],
-          ["Top 1 a las 06:00", f"{t1.estado}, {fm(t1.puntuacion, 2)} pts (máx. alcanzable {fm(t1.kpis.get('puntuacion_max_teorica'), 1)}), idoneidad {fm(t1.idoneidad, 1)} %; {fm(t1.kpis['horas_libres_total'], 0)} h libres"],
-          ["Top 1 a las 14:00", f"{t14.estado}, {fm(t14.puntuacion, 2)} pts, idoneidad {fm(t14.idoneidad, 1)} %; {fm(t14.kpis['horas_libres_total'], 0)} h libres"],
-          ["Tiempo muerto antes / después de medirlo sobre trabajo productivo", "06:00: 321 h → 114 h · 14:00: 238 h → 48 h (§4.4)"],
-          ["Contingencia C14 (10:00 → 06:00)", f"{c14.estado}, {fm(c14.puntuacion, 2)} pts; el SS de la pieza 14 se consume pero no hay pedidos sin servir"],
+          ["Top 1 a las 06:00", f"{t1.estado}, Índice KWD {fm(t1.puntuacion, 2)} (máx. alcanzable {fm(t1.kpis.get('puntuacion_max_teorica'), 1)}), idoneidad {fm(t1.idoneidad, 1)} %; {fm(t1.kpis['horas_libres_total'], 0)} h de tiempo muerto"],
+          ["Top 1 a las 14:00", f"{t14.estado}, Índice KWD {fm(t14.puntuacion, 2)} (máx. alcanzable {fm(t14.kpis.get('puntuacion_max_teorica'), 1)}), idoneidad {fm(t14.idoneidad, 1)} %; {fm(t14.kpis['horas_libres_total'], 0)} h de tiempo muerto"],
+          ["Tiempo muerto: evolución en la demo", f"06:00: 321 h → 114 h (trabajo productivo) → {fm(t1.kpis['horas_libres_total'], 0)} h (versión final, sin sobreproducción ficticia); 14:00: 238 h → 48 h → {fm(t14.kpis['horas_libres_total'], 0)} h (§4.4)"],
+          ["Contingencia C14 (10:00 → 06:00)", f"{c14.estado}, Índice KWD {fm(c14.puntuacion, 2)}; el SS de la pieza 14 se consume pero no hay pedidos sin servir"],
           ["Caso grave (7 células VE averiadas, stock = SS)", f"{sev.estado}: {fm(sev.kpis['piezas_no_servidas_total'], 0)} piezas sin servir → aviso para dirección"],
           ["Tamaño del MILP (24 h)", f"fase 1: {fm(X['st_rec06'][0]['vars'], 0)} variables / {fm(X['st_rec06'][0]['cons'], 0)} restricciones / {X['st_rec06'][0]['bins']} binarias; "
                                      f"fase 2: {fm(X['st_rec06'][1]['vars'], 0)} / {fm(X['st_rec06'][1]['cons'], 0)} / {X['st_rec06'][1]['bins']} enteras"],
-          ["Límite de tiempo", "8 s por plan (4 s por fase); Top-3 en ≈25 s"]]
+          ["Límite de tiempo", "8 s por plan (4 s por fase), también en la simulación semanal; Top-3 en ≈25 s"]]
     E += [tabla(kp, [5.6 * cm, 11.4 * cm], ["L", "L"], fs=7.6)]
     E += [H3("Conclusiones principales")]
     E += bullets([
@@ -640,9 +640,9 @@ def seccion_resumen(X, D):
         "Jerarquía de penalizaciones: <b>pedido no servido (1000) ≫ stock bajo el SS (50) ≫ criterios KWD</b>. Un pedido sin servir "
         "ya no descarta el plan: lo marca <b>CRÍTICO</b> y genera un aviso para dirección. Sólo las imposibilidades duras "
         "(almacén &gt; 800 m², reglas de células) lo vuelven INVIABLE.",
-        "La <b>idoneidad</b> es 100·(1 − gap), con gap = (primal − cota)/primal sobre el objetivo completo. Con 8 s por plan el solver no demuestra el óptimo en la demo (planes "
-        "FACTIBLES con idoneidad ≈ 90–92 %), por lo que se informa también de la puntuación máxima alcanzable.",
-        "Un <b>validador independiente</b> recalcula reglas y puntuación a partir de la activación del plan.",
+        "El criterio B penaliza el stock respecto al óptimo <b>por tramos convexos</b> (sin binarias): holgura barata, exceso y defecto progresivamente más caros. Desaparece la sobreproducción ficticia y el tiempo muerto real es el que se informa.",
+        "El <b>Índice KWD</b> (0–100) resume los cinco criterios. La <b>idoneidad</b> = 100·índice / índice máximo alcanzable, donde el máximo alcanzable lo acota la cota del solver: indica qué parte de lo mejor posible consigue el plan. Con 8 s por plan el solver no siempre demuestra el óptimo (planes FACTIBLES).",
+        "Un <b>validador independiente</b> recalcula reglas e Índice KWD a partir de la activación del plan.",
         "Se eliminan el plan manual, los flags y el Excel: el estado de entrada vive en <font name='DVM'>data/estado.json</font> y los "
         "supuestos están documentados aquí.",
     ])
@@ -682,18 +682,23 @@ DEC = [
     ("D8", "Demo: semana del 28/09/2026, 1.500 coches/día con doble de combustión (2.500 VE / 5.000 COMB por semana y pieza); C13 parada programada el 02/10 turno T con 2 técnicos y 1 operario de baja.", "v2 A11, v3 A6"),
     ("D9", "Horas libres como objetivo principal: R = fracción de horas libres del personal presente; desaparecen la plantilla P<sub>k,s</sub> y el EXCEDENTE.", "v3 A1"),
     ("D10", "Se elimina el plan manual (baseline): el impacto se compara con Top 2/3 y, en contingencia, con el plan previo a la incidencia.", "v3 A2"),
-    ("D11", "Stock óptimo = SS + demanda de un turno (demanda del día / 3), medido en cada cierre de turno; el criterio B (10 %) es la desviación media |I − óptimo| / óptimo.", "v3 A3"),
+    ("D11", "Stock óptimo = SS + demanda de un turno (demanda del día / 3), medido en cada cierre de turno; el criterio B (10 %) mide la desviación respecto a ese óptimo con la penalización por tramos de D18.", "v3 A3"),
     ("D12", "Se eliminan los flags: los supuestos se documentan en <font name='DVM'>docs/</font> y en este informe, no en la app.", "v3 A4"),
     ("D13", "Jerarquía pedido no servido ≫ SS ≫ criterios; stock &lt; 0 no descarta el plan (CRÍTICO + aviso a dirección). Tiempo límite de 8 s por plan.", "v3 A5"),
     ("D14", "Contingencia a petición: se dan de baja células y personas concretas (o nº por rol) y sólo se calcula al pulsar el botón.", "v3 B3"),
     ("D15", "Sin Excel: constantes fijas en el código y estado persistente en <font name='DVM'>data/estado.json</font>.", "v3 A6"),
     ("D16", "Planta en tiempo real sólo de visualización (sin botones de avería/baja ni recálculo automático).", "v3 B2"),
-    ("D17", "El tiempo muerto se mide sobre el trabajo productivo real (fracción u de la hora en que la célula produce) y se elimina el mínimo del 25 % por hora.", "commit ce2d6c6"),
+    ("D17", "El tiempo muerto se mide sobre el trabajo productivo real (fracción u de la hora en que la célula produce) y se elimina el mínimo del 25 % por hora.", "corrección post-v3"),
+    ("D18", "Penalización por tramos del stock óptimo: la desviación I − óptimo se penaliza con tramos convexos (anchos en múltiplos de D = óptimo − SS). Sobre el óptimo: 0,25·D gratis, 0,25·D a ×1, 0,5·D a ×5, resto a ×30; bajo el óptimo: 0,25·D gratis, resto a ×2. El factor ≈ 5 equilibra adelantar producción frente a ocupar personal; no hay variables binarias.", "final"),
+    ("D19", "Idoneidad redefinida: 100 · Índice KWD / Índice máximo alcanzable (cota del solver), en lugar de 100·(1 − gap). Mide cuánto de lo mejor posible consigue el plan, no la distancia relativa del objetivo.", "final"),
+    ("D20", "Nomenclatura: la «puntuación» pasa a llamarse <b>Índice KWD</b> en la app, los informes y este documento (el atributo del código sigue llamándose puntuacion).", "final"),
+    ("D21", "El límite de 8 s por plan se aplica también a la simulación semanal (15 turnos ≈ 2 min); sólo se mantiene gap_relativo ≥ 0,5 % en esa simulación.", "final"),
+    ("D22", "Las entradas de demanda de la app son enteras (piezas por semana y por día, formato %d); la demanda diaria por defecto = semanal / 5 puede ser fraccionaria dentro del motor.", "final"),
 ]
 
 SUP = [
     ("S1", "Capacidad de una célula = 3600 / ciclo_s piezas por hora a rendimiento (OEE) del 100 %; una célula activa produce u ∈ [0,1] de esa capacidad.", "Supuesto técnico", "datos.tabla_celulas"),
-    ("S2", "Puntuación = 100·(1 − Σ w<sub>i</sub>·comp<sub>i</sub>) con pesos 50/20/15/10/5; cada componente se normaliza en [0,1].", "Enunciado KWD", "config.PESO_PARAM"),
+    ("S2", "Índice KWD = 100·(1 − Σ w<sub>i</sub>·comp<sub>i</sub>) con pesos 50/20/15/10/5; cada componente se normaliza en [0,1]. El nombre «Índice KWD» sustituye a «puntuación» (D20).", "Enunciado KWD", "config.PESO_PARAM"),
     ("S3", "Stock de seguridad 400 piezas por célula VE y 200 por célula de combustión; la suma ocupa ≈ 151,7 m².", "Enunciado KWD", "datos.ss_por_celula"),
     ("S4", "Almacén de producto terminado 800 m² (incluye el SS); ocupación = Σ stock / piezas_m². La célula 10 no ocupa almacén.", "Enunciado KWD", "modelo r8"),
     ("S5", "Turnos M 06–14, T 14–22, N 22–06. La noche de 00–06 pertenece al día anterior (fecha_turno). Lunes a viernes laborables; sin producción ni expediciones en fin de semana.", "Confirmado por el equipo", "horizonte.construir_horizonte"),
@@ -712,8 +717,8 @@ SUP = [
     ("S18", "El stock óptimo de un cierre usa la demanda del día del turno que cierra; sólo se consideran los cierres laborables dentro del horizonte (06, 14 y 22 h).", "Supuesto técnico", "horizonte.cierres"),
     ("S19", "Pedido no servido = stock &lt; 0 (pedido pendiente acumulado); se penaliza por unidad normalizada (stock negativo / SS) y hora.", "Supuesto técnico", "modelo r6b"),
     ("S20", "El gap aceptado se impone como gap <b>absoluto</b> equivalente (gap_relativo × 0,5 sobre el objetivo escalado ×1000), no relativo; la fase 1 acepta 2 %.", "Supuesto técnico", "modelo._resolver_fase"),
-    ("S21", "Idoneidad = 100·(1 − gap), con gap = (primal − cota)/primal calculado sobre el objetivo completo (HiGHS omite el término constante, que se le suma a la cota); las alternativas Top 2/3 con idoneidad &lt; 50 % no se muestran. Estado OPTIMO sólo si HiGHS demuestra optimalidad; FACTIBLE si agota el tiempo.", "Supuesto técnico", "motor.IDONEIDAD_MIN_ALTERNATIVA"),
-    ("S22", "Top 1 = menos piezas sin servir y, a igualdad, mayor puntuación; las alternativas se obtienen con cortes sobre la configuración del turno actual.", "Supuesto técnico", "motor.recomendar"),
+    ("S21", "Idoneidad = 100·Índice KWD / Índice máximo alcanzable (D19). Gap = (primal − cota)/primal sobre el objetivo completo (a la cota de HiGHS se le suma el término constante que HiGHS omite). Las alternativas Top 2/3 con gap &gt; 50 % no se muestran. Estado OPTIMO sólo si HiGHS demuestra optimalidad; FACTIBLE si agota el tiempo.", "Supuesto técnico", "modelo.resolver / motor.IDONEIDAD_MIN_ALTERNATIVA"),
+    ("S22", "Top 1 = menos piezas sin servir y, a igualdad, mayor Índice KWD; las alternativas se obtienen con cortes sobre la configuración del turno actual.", "Supuesto técnico", "motor.recomendar"),
     ("S23", "Identificadores: del 1 al estándar por turno y rol; una baja por id quita ese id y el exceso de bajas quita los de numeración más alta. Todo trabajador presente está ASIGNADO, LIBRE o PARADA (técnico en parada).", "Supuesto técnico", "datos.trabajadores_disponibles"),
     ("S24", "La contingencia usa Top-1 (un solo plan), parte del stock del plan vigente en la hora indicada y una avería sin «hasta» dura hasta el fin del horizonte.", "Supuesto técnico", "rolling.contingencia"),
     ("S25", "Horizonte rodante de 24 h, recalculado desde la hora indicada con el stock del plan vigente.", "Confirmado por el equipo", "rolling"),
@@ -721,6 +726,7 @@ SUP = [
     ("S27", "Un trabajador de baja concreto sólo afecta a su turno de la fecha indicada.", "Supuesto técnico", "rolling.aplicar_evento"),
     ("S28", "Sin límite de arranques por célula ni tiempo mínimo de producción continua (sólo penalización 1e-4).", "Pendiente de validar con KWD", "modelo"),
     ("S29", "No se modelan cambios de referencia, mantenimiento preventivo automático ni materia prima: la producción sólo depende de la capacidad nominal y del personal.", "Pendiente de validar con KWD", "—"),
+    ("S31", "Los tramos de la penalización del stock óptimo (0,25/0,25/0,5·D; factores 0/1/5/30 por exceso y 0/2 por defecto) son una calibración del equipo, no un dato del enunciado.", "Supuesto técnico", "config.TRAMOS_EXCESO / TRAMOS_DEFECTO"),
     ("S30", "Los trabajadores de mto y calidad se asignan a células como cualquier otro rol (carga fraccionaria).", "Supuesto técnico", "personal"),
 ]
 
@@ -744,7 +750,7 @@ def seccion_supuestos(X, D):
 # ------------------------------------------------------------------------------------- 4. trabajo realizado
 def seccion_trabajo(X, D):
     E = H1("4. Trabajo realizado")
-    E += [P("La aplicación se construyó el 2 de octubre de 2026 en tres iteraciones y una corrección final, todas "
+    E += [P("La aplicación se construyó el 2 y 3 de octubre de 2026 en tres iteraciones y una serie de correcciones finales, todas "
             "trazables en el historial de git. Cada iteración incorporó las respuestas del equipo a las preguntas de la "
             "iteración anterior.")]
     E += [H2("4.1 Cronología")]
@@ -763,42 +769,63 @@ def seccion_trabajo(X, D):
          "Motor v3, 23 pruebas, resumen del MILP en lenguaje llano."],
         ["<b>Corrección</b>", "El tiempo muerto pasa a medirse sobre el <b>trabajo productivo real</b> (D17): una célula activa que produce sólo una fracción u de la hora ya no ocupa a todo el personal "
                               "durante la hora entera; se elimina el mínimo del 25 % por hora.",
-         "Tiempo muerto real de la demo: 321 h → 114 h (06:00) y 238 h → 48 h (14:00)."]],
+         "Tiempo muerto real de la demo: 321 h → 114 h (06:00) y 238 h → 48 h (14:00)."],
+        ["<b>Corrección: gap</b>", "Se detecta que HiGHS no incluye el término constante del objetivo (el «1 −» de R): su gap relativo se medía sobre una base equivocada y la idoneidad quedaba falseada. "
+                                   "El gap se recalcula con el objetivo completo (primal con la constante y cota desplazada por la misma constante).",
+         "Gap e idoneidad coherentes con el objetivo real."],
+        ["<b>Penalización por tramos</b>", "El criterio B pasa de |I − óptimo|/óptimo a una penalización convexa por tramos (D18, formulación exacta en §5.3). Con la lineal el solver «sobreproducía» sin coste para llenar al personal; "
+                                           "los tramos hacen caro el exceso. En la célula C3 el exceso sobre el óptimo pasó de +207 % (24 h) a ≈ 41 % como máximo y ≈ 7 h.",
+         "Desaparece la sobreproducción ficticia; el tiempo muerto sube a ≈ 183 h (06:00) porque ya no se «llena» con piezas que no se necesitan."],
+        ["<b>Idoneidad</b>", "Redefinida como 100 · Índice KWD / Índice máximo alcanzable (D19) y renombrada la «puntuación» como <b>Índice KWD</b> (D20). La app muestra Idoneidad, Índice KWD e Índice máximo alcanzable.",
+         "Idoneidad interpretable: parte de lo mejor posible que consigue el plan."],
+        ["<b>Interfaz</b>", "Reorganización de pestañas: Datos, Recomendación (con el botón del informe PDF arriba), Overview 24 h, Contingencia, Planta en tiempo real, KPIs, Trabajadores, Alternativas, Semana. "
+                            "Demanda en enteros (D22); simulación semanal con 8 s por plan y barra de progreso (D21).",
+         "9 pestañas (la pestaña Informe desaparece: su botón vive en Recomendación)."]],
         [2.3 * cm, 10.7 * cm, 4.0 * cm], ["L", "L", "L"], fs=7.4, valign="TOP")]
     E += [H2("4.2 Inventario del código")]
     E += [tabla([
         ["Módulo", "Responsabilidad"],
-        [K("config.py"), "Constantes, parámetros por defecto (PARAMETROS_DEFECTO), componentes y pesos de la puntuación"],
+        [K("config.py"), "Constantes, parámetros por defecto, componentes y pesos del Índice KWD, tramos de la penalización del stock óptimo (TRAMOS_EXCESO / TRAMOS_DEFECTO, penalizacion_tramos)"],
         [K("datos.py"), "Escenario, constantes de planta, estado persistente (cargar_estado / guardar_estado / estado_ejemplo), demanda del día, bajas y trabajadores disponibles, stock óptimo"],
         [K("horizonte.py"), "Slots horarios, turnos, factor energético, bloqueos por parada, disponibilidad de personal, ciclos de expedición y camiones, cierres de turno"],
-        [K("modelo.py"), "Formulación MILP (preparar / resolver en dos fases), evaluación de planes (evaluar), KPIs y puntuación"],
+        [K("modelo.py"), "Formulación MILP (preparar / resolver en dos fases), evaluación de planes (evaluar), KPIs e Índice KWD"],
         [K("motor.py"), "Top-K con cortes, explicación (qué/por qué/impacto), alertas y estado de la recomendación"],
         [K("personal.py"), "Asignación nominal de trabajadores puesto a puesto (first-fit decreasing estable)"],
-        [K("validador.py"), "Validación independiente de reglas y puntuación; agotamiento, desabastecimiento y aviso para dirección"],
+        [K("validador.py"), "Validación independiente de reglas e Índice KWD; agotamiento, desabastecimiento y aviso para dirección"],
         [K("rolling.py"), "Eventos, estado en tiempo real por célula, contingencia (células/personas), simulación semanal"],
         [K("plan.py, informes.py, cli.py"), "Estructura Plan, informe PDF de la app y línea de comandos"],
-        [K("app/dashboard.py, graficos.py"), "Dashboard Streamlit con 10 pestañas: Datos, Planta en tiempo real, Trabajadores, Recomendación, KPIs, Overview 24 h, Alternativas, Contingencia, Semana, Informe"],
+        [K("app/dashboard.py, graficos.py"), "Dashboard Streamlit con 9 pestañas, en este orden: Datos, Recomendación (botón del informe PDF arriba), Overview 24 h, Contingencia, Planta en tiempo real, KPIs, Trabajadores, Alternativas, Semana"],
         [K("tests/test_motor.py"), "23 pruebas pytest (reglas duras, SS, CRÍTICO, R, B, estado.json, personal, contingencia)"]],
         [4.4 * cm, 12.6 * cm], ["L", "L"], fs=7.4)]
     E += [H2("4.3 Qué se eliminó en la v3")]
     E += bullets([
         "<b>Plan manual / baseline</b>: ya no se calcula, no hay warm start desde él ni «impacto vs referencia». El arranque lo da la fase 1 continua del propio modelo.",
-        "<b>Flags</b> (F1…F19): sustituidos por el registro de supuestos S1…S30 de este informe.",
+        "<b>Flags</b> (F1…F19): sustituidos por el registro de supuestos S1…S31 de este informe.",
         "<b>Excel</b> (<font name='DVM'>data/*.xlsx</font>): las constantes viven en <font name='DVM'>datos.py</font>/<font name='DVM'>config.py</font> y las entradas en <font name='DVM'>data/estado.json</font>.",
         "<b>Plantilla P<sub>k,s</sub>, EXCEDENTE y término auxiliar de horas libres de plantilla</b>; <b>colchón del 10 %</b> sobre el SS y <b>condición de stock final</b>.",
         "<b>Recálculo automático</b> y botones de avería/baja en la planta en tiempo real (ahora sólo visualiza).",
     ])
-    E += [H2("4.4 Corrección final: tiempo muerto medido sobre trabajo productivo")]
+    E += [H2("4.4 Correcciones posteriores a la v3")]
+    E += [H3("1. Tiempo muerto sobre trabajo productivo (321 → 114 h)")]
     E += [P("Con la definición inicial de la v3, R contaba como ocupada toda hora en que una célula estaba <i>activa</i>, aunque "
-            "produjera sólo una fracción u de la hora. El modelo podía así «ocupar» al personal activando células que no producían. "
-            "La corrección calcula el trabajo como carga × u (la célula 10, que no produce, cuenta la hora completa): "
-            "R = (Σ Disp − Σ trabajo) / Σ Disp. Efecto medido en la demo:")]
-    E += [tabla([["Plan (demo 02/10)", "Horas libres antes", "Horas libres después", "Reducción"],
-                 ["Top 1 a las 06:00", "321 h", f"{fm(X['rec06'].top[0].kpis['horas_libres_total'], 0)} h", "−64 %"],
-                 ["Top 1 a las 14:00", "238 h", f"{fm(X['rec14'].top[0].kpis['horas_libres_total'], 0)} h", "−80 %"]],
-                [5 * cm, 4 * cm, 4 * cm, 4 * cm], ["L", "R", "R", "R"], fs=7.8)]
-    E += [P("Las cifras «antes» son las medidas por el equipo en el commit anterior (321 h y 238 h); las «después» se recalculan "
-            "al generar este PDF con el motor actual.", "small")]
+            "produjera sólo una fracción u de la hora. La corrección calcula el trabajo como carga × u (la célula 10, que no produce, cuenta la hora completa): "
+            "R = (Σ Disp − Σ trabajo) / Σ Disp. El tiempo muerto de la demo bajó de 321 h a 114 h (06:00) y de 238 h a 48 h (14:00).")]
+    E += [H3("2. Gap: término constante del objetivo")]
+    E += [P("HiGHS minimiza sin el término constante del objetivo (el «1 −» de R), por lo que su gap relativo se medía sobre una base errónea. "
+            "Ahora el motor toma primal = valor del plan en PuLP (con constante) y cota = mip_dual_bound + (primal − objetivo de HiGHS), de modo que gap = (primal − cota)/primal es el del objetivo completo.")]
+    E += [H3("3. Penalización por tramos del stock óptimo")]
+    E += [P("Con B lineal, el solver podía producir muy por encima del óptimo a coste casi nulo para «ocupar» al personal. El criterio B pasa a una penalización convexa por tramos (§5.3). "
+            "Efecto medido por el equipo en la célula C3: exceso sobre el óptimo de +207 % durante 24 h → ≈ 41 % como máximo durante ≈ 7 h. "
+            "Como la sobreproducción ficticia desaparece, el tiempo muerto sube hasta ≈ 183 h: es el tiempo muerto <i>honesto</i>, no el producido por llenar con piezas innecesarias.")]
+    E += [H3("4. Idoneidad e Índice KWD")]
+    E += [P("La idoneidad se redefine como 100·Índice KWD / Índice máximo alcanzable (§5.3), y la «puntuación» se renombra «Índice KWD».")]
+    E += [H3("5. Reorganización de la interfaz")]
+    E += [P("Orden de pestañas: Datos, Recomendación (botón del informe PDF arriba), Overview 24 h, Contingencia, Planta en tiempo real, KPIs, Trabajadores, Alternativas, Semana.")]
+    E += [tabla([["Plan (demo 02/10)", "Tiempo muerto antes (v3 inicial)", "Tras trabajo productivo", "Versión final (motor actual)"],
+                 ["Top 1 a las 06:00", "321 h", "114 h", f"{fm(X['rec06'].top[0].kpis['horas_libres_total'], 0)} h"],
+                 ["Top 1 a las 14:00", "238 h", "48 h", f"{fm(X['rec14'].top[0].kpis['horas_libres_total'], 0)} h"]],
+                [4.4 * cm, 4.2 * cm, 4 * cm, 4.4 * cm], ["L", "R", "R", "R"], fs=7.8)]
+    E += [P("Las cifras 321/238 h y 114/48 h son las medidas por el equipo en los commits correspondientes; la columna final se recalcula al generar este PDF con el motor actual.", "small")]
     return E
 
 # ------------------------------------------------------------------------------------- 5. metodología
@@ -827,7 +854,7 @@ def seccion_metodologia(X, D, F):
     E += [tabla(filas, [1.3 * cm, 1.4 * cm, 1.5 * cm, 1.5 * cm, 1.7 * cm, 1.4 * cm, 1.4 * cm, 1.5 * cm, 1.4 * cm, 1.4 * cm, 1.4 * cm],
                 ["C"] * 11, fs=7.0)]
     E += [P("Tabla 5.1 — Células y cargas por rol (personas-equivalente mientras la célula está activa). La célula 10 es el servicio logístico.", "cap")]
-    E += [P("<b>Demanda del día</b> ({0}): corregida si existe; si no, semanal / 5 en día laborable. La demanda diaria por pieza de cada tipo se "
+    E += [P("<b>Demanda del día</b> ({0}): corregida si existe; si no, semanal / 5 en día laborable (las entradas de la app, por semana y por día, son números enteros). La demanda diaria por pieza de cada tipo se "
             "reparte por igual entre los 16 ciclos del día; la demo (1.500 coches/día, 2 COMB : 1 VE) da {1} piezas VE y {2} COMB por pieza y día."
             .format(K("datos.demanda_dia"), fm(D["dem_dia"][0], 0), fm(D["dem_dia"][1], 0)))]
 
@@ -861,6 +888,7 @@ def seccion_metodologia(X, D, F):
         ["s<sub>c,h</sub>, q<sub>c,h</sub>", "≥ 0", "Holgura de SS consumido y de pedido no servido (stock &lt; 0)"],
         ["sa<sub>h</sub>", "≥ 0", "Holgura de almacén (m² por encima de 800)"],
         ["d<sup>+</sup><sub>t,c</sub>, d<sup>−</sup><sub>t,c</sub>", "≥ 0", "Desviación por encima/por debajo del stock óptimo en el cierre t"],
+        ["x<sup>p</sup><sub>j,t,c</sub> (j=0…3), x<sup>n</sup><sub>j,t,c</sub> (j=0,1)", "[0, ancho<sub>j</sub>·D<sub>t,c</sub>]; el último tramo sin cota", "Segmentos de la desviación por exceso (p) y por defecto (n); continuas, sin binarias"],
         ["w<sub>c,h</sub>", "≥ 0", "Arranque de la célula (a<sub>c,h</sub> − a<sub>c,h−1</sub>)"]],
         [3.2 * cm, 6.3 * cm, 7.5 * cm], ["L", "L", "L"], fs=7.4)]
     E += [H3("Restricciones")]
@@ -876,20 +904,38 @@ def seccion_metodologia(X, D, F):
         "(R8)  Σ_c I[c,h] / dens[c]  <=  800 + sa[h]                              (almacén de producto terminado)",
         "(R10) w[c,h] >= a[c,h] - a[c,h-1]                                        (arranques)",
         "(B)   I[c,t] - opt[t,c] = d+[t,c] - d-[t,c]                              para cada cierre t en T",
+        "(Bp)  d+[t,c] = Σ_j xp[j,t,c],   0 <= xp[j,t,c] <= ancho_p[j]·D[t,c]     (j=0..3)",
+        "(Bn)  d-[t,c] = Σ_j xn[j,t,c],   0 <= xn[j,t,c] <= ancho_n[j]·D[t,c]     (j=0..1)",
         "(TK)  y[c] >= a[c,h], y[c] <= Σ_{h en turno actual} a[c,h]               (sólo con cortes; ver §5.5)",
         "      Σ_{c en S}(1 - y[c]) + Σ_{c no en S} y[c] >= 1                     para cada configuración S ya obtenida"])]
     E += [Spacer(1, 4), P("La regla 4 (paradas) y la regla 2 (fuera de W nada se activa) se imponen como cota superior 0 de a<sub>c,h</sub>. "
                           "En la fase 1 no existen N<sub>k,h</sub> y sólo se aplica (R5) con disp.")]
-    E += [H3("Componentes de la puntuación (menor es mejor)")]
+    E += [H3("Componentes del Índice KWD (menor es mejor)")]
     E += [formulas([
         "Trabajo[k,h] = Σ_{c en P} req[c,k]·u[c,h]  +  req[10,k]·a[10,h]          (C10 cuenta la hora completa)",
         "R = ( Σ_{k,h en W} disp[k,h] - Σ_{k,h en W} Trabajo[k,h] ) / Σ_{k,h en W} disp[k,h]     horas libres / presentes",
         "S = (1/H) Σ_h ( Σ_c I[c,h]/dens[c] ) / 800                               ocupación media del almacén",
         "Q = (1/|W|) Σ_{h en W} media_{k en {mto,calidad}} ( N[k,h] / disp[k,h] )  (fase 1: N sustituido por la carga)",
-        "B = media_{t en T, c en P} ( |I[c,t] - opt[t,c]| / opt[t,c] ) = media (d+ + d-)/opt",
+        "D[t,c] = opt[t,c] - SS[c]   (= demanda de un turno de la pieza; en el código max(D,1))",
+        "B = (1/(|T|·|P|)) Σ_{t,c} [ Σ_j fp[j]·xp[j,t,c] + Σ_j fn[j]·xn[j,t,c] ] / opt[t,c]",
+        "      tramos por exceso  (ancho·D, factor): (0,25; 0) (0,25; 1) (0,5; 5) (sin límite; 30)",
+        "      tramos por defecto (ancho·D, factor): (0,25; 0) (sin límite; 2)   [bajo SS: + penalizacion_ss]",
         "E = Σ_h f[h]·Σ_c kw[c]·u[c,h]  /  ( |W|·Σ_c kw[c]·fmax ),   fmax = 1,2",
-        "Puntuación = 100·(1 - 0,50·R - 0,20·S - 0,15·Q - 0,10·B - 0,05·E)"])]
-    E += [Spacer(1, 4), P("Por tanto R <b>no usa N</b>: mide el tiempo muerto real del personal presente (disp menos trabajo productivo), mientras que N "
+        "Índice KWD = 100·(1 - 0,50·R - 0,20·S - 0,15·Q - 0,10·B - 0,05·E)",
+        "Máx. alcanzable = min(100, Índice KWD + 100·objetivo·gap),  objetivo = primal/1000",
+        "Idoneidad = 100·min(1, Índice KWD / Máx. alcanzable)     (100 si el máximo es ≈ 0)"])]
+    E += [Spacer(1, 4), P("<b>Criterio B por tramos (convexo).</b> Cada tramo es más caro que el anterior y el solver llena primero los baratos, por lo que "
+                          "el reparto en segmentos es exacto <b>sin binarias</b>: la función es lineal a trozos convexa y minimizar la suma de segmentos con "
+                          "d = Σ x los llena en orden de coste. Los anchos se miden en turnos de demanda D = óptimo − SS (stock óptimo = SS + demanda de un turno). "
+                          "Hasta ±0,25·D de desviación no se penaliza (zona muerta); por encima del óptimo cuesta ×1 hasta 0,5·D, ×5 hasta 1·D y ×30 después; "
+                          "por debajo cuesta ×2. El factor ≈ 5 es el punto de equilibrio frente a ocupar personal: por debajo del 5 compensa adelantar producción; por encima, no. "
+                          "<font name='DVM'>config.penalizacion_tramos</font> evalúa la misma función fuera del modelo (modelo.evaluar y validador).", "body")]
+    E += [Spacer(1, 2), P("<b>Índice máximo alcanzable e idoneidad.</b> El margen de mejora demostrado por el solver es 100·objetivo·gap (en puntos de Índice KWD, aproximado: "
+                          "supone que los términos auxiliares del objetivo se mantienen). El máximo alcanzable es min(100, Índice + margen) y la idoneidad es "
+                          "100·Índice / máximo alcanzable: qué parte de lo mejor que se puede conseguir con estos recursos y esta demanda logra el plan. "
+                          "Un plan OPTIMO tiene gap 0 e idoneidad 100 %. En un plan INVIABLE (contingencia) la idoneidad no aplica (—). "
+                          "Esta definición sustituye a la anterior, 100·(1 − gap), que medía la distancia relativa del objetivo, no la del Índice KWD.", "body")]
+    E += [Spacer(1, 2), P("Por tanto R <b>no usa N</b>: mide el tiempo muerto real del personal presente (disp menos trabajo productivo), mientras que N "
                           "interviene en Q, en las restricciones de personal y en el roster. (CAMBIOS_V3 A1 define R con N; el código la redefinió "
                           "en la corrección de §4.4.)")]
     E += [H3("Función objetivo y jerarquía de penalizaciones")]
@@ -915,7 +961,7 @@ def seccion_metodologia(X, D, F):
         f"<b>Fase 2 (4 s, N entero).</b> Se añaden las 120 variables N<sub>k,h</sub> y sus cortes ({fm(s2['vars'], 0)} variables, {fm(s2['cons'], 0)} restricciones, "
         f"{s2['bins']} enteras). HiGHS arranca en caliente con la activación de la fase 1 (<font name='DVM'>setInitialValue</font>).",
         "<b>Gap.</b> Se configura <font name='DVM'>gapRel = 0</font> y <font name='DVM'>gapAbs = gap_relativo × 0,5 × 1000</font> (equivalente a un gap relativo sobre un objetivo típico de 0,5): "
-        "con penalizaciones grandes un gap relativo pararía demasiado pronto. El gap que se informa se recalcula con el objetivo completo: HiGHS no incluye el término constante (p. ej. el «1 −» de R), así que primal = valor del plan en PuLP, cota = mip_dual_bound + (primal − objetivo de HiGHS) y gap = (primal − cota)/primal. Idoneidad = 100·(1 − gap) y puntuación máxima alcanzable = min(100, puntuación + 100·objetivo·gap).",
+        "con penalizaciones grandes un gap relativo pararía demasiado pronto. El gap que se informa se recalcula con el objetivo completo: HiGHS no incluye el término constante (p. ej. el «1 −» de R), así que primal = valor del plan en PuLP, cota = mip_dual_bound + (primal − objetivo de HiGHS) y gap = (primal − cota)/primal. Idoneidad = 100·Índice KWD / Índice máximo alcanzable, con máximo alcanzable = min(100, Índice KWD + 100·objetivo·gap) (§5.3).",
         "<b>Estado.</b> OPTIMO si HiGHS demuestra optimalidad; FACTIBLE si se agota el tiempo con solución; INVIABLE si hay holgura de almacén "
         "(sa &gt; 1e-6) o el validador detecta incumplimientos; CRITICO si el plan es viable pero hay pedidos sin servir (§5.8).",
     ])
@@ -925,8 +971,8 @@ def seccion_metodologia(X, D, F):
     E += [P(f"{K('motor.recomendar(esc, inicio, horas=24, top_k=3)')} resuelve el MILP y excluye la configuración del turno actual: "
             "y<sub>c</sub> vale 1 si la célula c se activa en algún slot del turno actual y el corte (TK) obliga a que el conjunto de células "
             "activas difiera de cada configuración S ya obtenida en al menos una célula. Se repite K = 3 veces (o hasta que el modelo no tenga solución). "
-            "Después: (i) se ordenan por piezas no servidas (redondeadas) y, a igualdad, por puntuación; (ii) se descartan las alternativas Top 2/3 con "
-            "idoneidad &lt; 50 %; (iii) se genera la explicación del Top 1. Cada plan se resuelve con 8 s, de modo que un Top-3 tarda ≈25 s.")]
+            "Después: (i) se ordenan por piezas no servidas (redondeadas) y, a igualdad, por Índice KWD; (ii) se descartan las alternativas Top 2/3 cuyo gap supera el 50 % ("
+            "motor.IDONEIDAD_MIN_ALTERNATIVA); (iii) se genera la explicación del Top 1. Cada plan se resuelve con 8 s, de modo que un Top-3 tarda ≈25 s. La simulación semanal (<font name='DVM'>rolling.simular_semana</font>: 15 turnos desde el lunes 06:00, con barra de progreso en la app) usa el mismo límite de 8 s por plan, con gap_relativo ≥ 0,5 %.")]
 
     # --- 5.6 roster
     E += [H2("5.6 Asignación nominal de personal (roster)")]
@@ -946,7 +992,7 @@ def seccion_metodologia(X, D, F):
     E += [H2("5.7 Validador independiente")]
     E += [P(f"{K('validador.validar')} no reutiliza el modelo: recalcula con sus propias fórmulas sobre la activación y el uso del plan. Comprueba binariedad y u ≤ a (R1), "
             "célula 10 y fuera de horas laborables (R2), células 11 y 12 (R3), paradas (R4), personal entero y N = ⌈carga⌉ ≤ disp (R5), balance de stock (R6), "
-            "almacén ≤ 800 m² (R8), cargas ≤ 1 por trabajador, y recalcula R, S, Q, B, E y la puntuación (tolerancia 1e-4). Una lista vacía certifica el plan. "
+            "almacén ≤ 800 m² (R8), cargas ≤ 1 por trabajador, y recalcula R, S, Q, B, E y el Índice KWD (tolerancia 1e-4). Una lista vacía certifica el plan. "
             "Stock bajo el SS y stock &lt; 0 <b>no</b> son incumplimientos sino avisos.")]
 
     # --- 5.8 CRITICO
@@ -960,7 +1006,7 @@ def seccion_metodologia(X, D, F):
     # --- 5.9 explicación
     E += [H2("5.9 Explicación y alertas")]
     E += [P(f"{K('motor._explicar')} describe el turno actual: <b>qué</b> (células activas, franja, piezas y personas), <b>por qué</b> (la pieza caería bajo el SS a tal hora sin producir, "
-            "o se acerca al óptimo de cierre; producción anticipada por una parada posterior; franja solar) e <b>impacto</b> (comparación con Top 2/3: puntuación y horas libres). "
+            "o se acerca al óptimo de cierre; producción anticipada por una parada posterior; franja solar) e <b>impacto</b> (comparación con Top 2/3: Índice KWD y horas libres). "
             "Alertas: plan crítico/inviable, SS consumido y su reposición, stock lejos del óptimo (&gt; 25 % en algún cierre), almacén &gt; 90 %, recurso al 100 %, "
             "horas libres totales y alternativas descartadas.")]
 
@@ -984,7 +1030,7 @@ def seccion_metodologia(X, D, F):
         filas.append([f"Top {j // 2 + 1} (06:00)", f"{fm(st[j]['vars'], 0)} / {fm(st[j]['cons'], 0)} / {st[j]['bins']}", f"{fm(st[j]['t'], 1)} s",
                       f"{fm(st[j + 1]['vars'], 0)} / {fm(st[j + 1]['cons'], 0)} / {st[j + 1]['bins']}", f"{fm(st[j + 1]['t'], 1)} s"])
     E += [tabla(filas, [3 * cm, 4.2 * cm, 1.8 * cm, 5.2 * cm, 2.8 * cm], ["L", "C", "R", "C", "R"], fs=7.6)]
-    E += [P(f"Tabla 5.2 — Tamaño y tiempo del MILP en la demo de las 06:00. Con 8 s por plan HiGHS agota el tiempo en ambas fases (idoneidad ≈ 90–92 %); "
+    E += [P(f"Tabla 5.2 — Tamaño y tiempo del MILP en la demo de las 06:00. Con 8 s por plan HiGHS agota el tiempo en ambas fases (planes FACTIBLES; idoneidad {fm(min(p.idoneidad for p in X['rec06'].top), 1)}–{fm(max(p.idoneidad for p in X['rec06'].top), 1)} % a las 06:00); "
             f"el cruce del Top-3 completo tarda {fm(X['rec06'].tiempo_total_s, 0)} s a las 06:00 y {fm(X['rec14'].tiempo_total_s, 0)} s a las 14:00.", "cap")]
     return E
 
@@ -995,13 +1041,13 @@ def _cfg(l):
 
 
 def _tabla_planes(rec):
-    f = [["Plan", "Estado", "Pts", "Máx. alcanz.", "Idon. %", "H. libres", "m² medio", "kWh red", "Camiones/día", "Configuración turno actual"]]
+    f = [["Plan", "Estado", "Índice KWD", "Máx. alcanz.", "Idon. %", "Tiempo muerto (h)", "Desv. media %", "Desv. máx. %", "Configuración turno actual"]]
     for p in rec.top:
         k = p.kpis
         f.append([p.nombre, p.estado, fm(p.puntuacion, 2), fm(k.get("puntuacion_max_teorica"), 1), fm(p.idoneidad, 1), fm(k["horas_libres_total"], 0),
-                  fm(k["m2_medio"], 0), fm(k["kwh_total"], 0), fm(k["camiones_dia"], 0), _cfg(p.config_turno_actual)])
-    return tabla(f, [1.3 * cm, 1.6 * cm, 1.1 * cm, 1.4 * cm, 1.2 * cm, 1.3 * cm, 1.3 * cm, 1.3 * cm, 1.5 * cm, 4.9 * cm],
-                 ["L", "L", "R", "R", "R", "R", "R", "R", "R", "L"], fs=7.0)
+                  fm(k["stock_opt_dev_media_pct"], 1), fm(k["stock_opt_dev_max_pct"], 1), _cfg(p.config_turno_actual)])
+    return tabla(f, [1.3 * cm, 1.7 * cm, 1.4 * cm, 1.5 * cm, 1.2 * cm, 1.6 * cm, 1.4 * cm, 1.4 * cm, 5.5 * cm],
+                 ["L", "L", "R", "R", "R", "R", "R", "R", "L"], fs=7.0)
 
 
 def _tabla_que(rec):
@@ -1013,7 +1059,7 @@ def _tabla_que(rec):
 
 
 def _tabla_comp(planes, nombres):
-    f = [["Plan"] + [NOMBRES_COMPONENTE[c] for c in COMPONENTES] + ["Puntuación"]]
+    f = [["Plan"] + [NOMBRES_COMPONENTE[c] for c in COMPONENTES] + ["Índice KWD"]]
     for p, n in zip(planes, nombres):
         f.append([n] + [f"{fm(p.componentes[c], 3)} → {fm(p.contribuciones[c], 1)}" for c in COMPONENTES] + [fm(p.puntuacion, 2)])
     return tabla(f, [2.3 * cm, 2.5 * cm, 2.4 * cm, 2.5 * cm, 2.3 * cm, 2.3 * cm, 2.1 * cm], ["L", "C", "C", "C", "C", "C", "R"], fs=7.0)
@@ -1031,18 +1077,18 @@ def seccion_ejemplo(X, D, F):
             f"todas las cifras proceden de {K('motor.recomendar')} y {K('rolling.contingencia')}.")]
 
     E += [H2("6.1 Plan de las 06:00")]
-    E += [_tabla_planes(r06), P("Tabla 6.1 — Top-K de las 06:00 (planes ordenados por piezas sin servir y puntuación; Top 2/3 se descartarían con idoneidad &lt; 50 %).", "cap")]
+    E += [_tabla_planes(r06), P("Tabla 6.1 — Top-K de las 06:00 (ordenados por piezas sin servir e Índice KWD; Top 2/3 se descartarían con gap &gt; 50 %). Desviación = |stock − óptimo|/óptimo en los cierres de turno.", "cap")]
     E += [figc(F["gantt06"], "Figura 6.1 — Activación de células del Top 1 a las 06:00 (24 h).", 16.2)]
     E += [H3("Qué activar en el turno de mañana")]
     E += [_tabla_que(r06)]
     E += [Spacer(1, 4)]
     E += [P("<b>Por qué.</b> " + " ".join(r06.explicacion["porque"][:5]).replace("<", "&lt;"), "small")]
     ind = {r: k1[f"horas_libres_{r}"] for r in RECURSOS}
-    E += [P(f"<b>Horas libres.</b> El Top 1 deja {fm(k1['horas_libres_total'], 0)} horas-persona sin tarea de {fm(D['disp_rec06'], 0)} presentes en horas laborables "
+    E += [P(f"<b>Tiempo muerto (horas libres).</b> El Top 1 deja {fm(k1['horas_libres_total'], 0)} horas-persona sin tarea de {fm(D['disp_rec06'], 0)} presentes en horas laborables "
             f"(R = {fm(t1.componentes['R'], 3)}): operarios {fm(ind['operarios'], 0)}, picking {fm(ind['picking'], 0)}, carretilleros {fm(ind['carretilleros'], 0)}, "
-            f"mto {fm(ind['mto'], 0)} y calidad {fm(ind['calidad'], 0)}. Picking y carretilleros están al 100 % durante todo el horizonte: el cuello de botella "
+            f"mto {fm(ind['mto'], 0)} y calidad {fm(ind['calidad'], 0)}. Picking y carretilleros están al 100 % en casi todo el horizonte (≈ 21–22 de 24 h): el cuello de botella "
             "no es el personal de producción sino picking y carretillero, y las horas libres se concentran en mantenimiento y calidad.")]
-    E += [figc(F["contrib06"], "Figura 6.2 — Contribución de cada criterio a la puntuación (06:00).", 16.2)]
+    E += [figc(F["contrib06"], "Figura 6.2 — Contribución de cada criterio al Índice KWD (06:00).", 16.2)]
     E += [_tabla_comp(r06.top, [p.nombre for p in r06.top]), P("Tabla 6.2 — Componente normalizado → contribución en puntos (100·peso·(1 − componente)).", "cap")]
     E += [figc(F["stock06"], "Figura 6.3 — Stock/SS de cada pieza y stock óptimo en los cierres de turno (rombos), Top 1 a las 06:00.", 16.2)]
     sv = t1.stock_vs_optimo
@@ -1068,13 +1114,16 @@ def seccion_ejemplo(X, D, F):
     E += [P(f"A las 14:00 el Top 1 deja {fm(k14['horas_libres_total'], 0)} horas libres (R = {fm(t14.componentes['R'], 3)}) y {fm(k14['demanda_cubierta_pct'], 0)} % de la demanda cubierta. "
             "La célula 13 no aparece en la configuración: está bloqueada de 14:00 a 22:00 y sus 2 técnicos se restan del personal de mantenimiento.")]
     E += [tabla([["Magnitud", "06:00", "14:00"],
-                 ["Horas libres totales (antes de la corrección)", "321 h", "238 h"],
-                 ["Horas libres totales (motor actual)", f"{fm(k1['horas_libres_total'], 1)} h", f"{fm(k14['horas_libres_total'], 1)} h"],
-                 ["Puntuación Top 1", fm(t1.puntuacion, 2), fm(t14.puntuacion, 2)],
+                 ["Tiempo muerto (v3 inicial)", "321 h", "238 h"],
+                 ["Tiempo muerto tras medirlo sobre trabajo productivo", "114 h", "48 h"],
+                 ["Tiempo muerto (versión final, motor actual)", f"{fm(k1['horas_libres_total'], 1)} h", f"{fm(k14['horas_libres_total'], 1)} h"],
+                 ["Índice KWD Top 1", fm(t1.puntuacion, 2), fm(t14.puntuacion, 2)],
+                 ["Índice máximo alcanzable", fm(k1.get("puntuacion_max_teorica"), 1), fm(k14.get("puntuacion_max_teorica"), 1)],
                  ["Idoneidad Top 1", f"{fm(t1.idoneidad, 1)} %", f"{fm(t14.idoneidad, 1)} %"],
-                 ["Desviación media del stock óptimo", f"{fm(k1['stock_opt_dev_media_pct'], 1)} %", f"{fm(k14['stock_opt_dev_media_pct'], 1)} %"]],
-                [8 * cm, 4 * cm, 4 * cm], ["L", "R", "R"], fs=7.8, destacar_filas=(2,)),
-          P("Tabla 6.6 — Resumen de los dos planes y efecto de medir el tiempo muerto sobre el trabajo productivo.", "cap")]
+                 ["Desviación media del stock óptimo", f"{fm(k1['stock_opt_dev_media_pct'], 1)} %", f"{fm(k14['stock_opt_dev_media_pct'], 1)} %"],
+                 ["Desviación máxima del stock óptimo", f"{fm(k1['stock_opt_dev_max_pct'], 1)} %", f"{fm(k14['stock_opt_dev_max_pct'], 1)} %"]],
+                [8 * cm, 4 * cm, 4 * cm], ["L", "R", "R"], fs=7.8, destacar_filas=(3,)),
+          P("Tabla 6.6 — Resumen de los dos planes; evolución del tiempo muerto con las correcciones.", "cap")]
 
     # --- contingencia C14
     c14 = X["c14"]
@@ -1084,10 +1133,11 @@ def seccion_ejemplo(X, D, F):
             "El motor toma el stock del plan de las 06:00 en la hora 10:00 y recalcula 24 h.")]
     E += [tabla([["Indicador", "Plan previo", "Contingencia C14"],
                  ["Estado", a.estado, d.estado],
-                 ["Puntuación", fm(a.puntuacion, 2), fm(d.puntuacion, 2)],
-                 ["Horas libres totales (24 h)", fm(a.kpis["horas_libres_total"], 0), fm(d.kpis["horas_libres_total"], 0)],
+                 ["Índice KWD", fm(a.puntuacion, 2), fm(d.puntuacion, 2)],
+                 ["Tiempo muerto total (24 h)", fm(a.kpis["horas_libres_total"], 0), fm(d.kpis["horas_libres_total"], 0)],
                  ["Piezas no servidas", fm(a.kpis["piezas_no_servidas_total"], 0), fm(d.kpis["piezas_no_servidas_total"], 0)],
-                 ["Desviación media del stock óptimo (cierres)", f"{fm(a.kpis['stock_opt_dev_media_pct'], 0)} %", f"{fm(d.kpis['stock_opt_dev_media_pct'], 0)} %"]],
+                 ["Idoneidad", f"{fm(a.idoneidad, 1)} %", f"{fm(d.idoneidad, 1)} %"],
+                 ["Desviación media / máxima del stock óptimo", f"{fm(a.kpis['stock_opt_dev_media_pct'], 1)} % / {fm(a.kpis['stock_opt_dev_max_pct'], 1)} %", f"{fm(d.kpis['stock_opt_dev_media_pct'], 1)} % / {fm(d.kpis['stock_opt_dev_max_pct'], 1)} %"]],
                 [7 * cm, 4.5 * cm, 4.5 * cm], ["L", "R", "R"], fs=7.8)]
     E += [Spacer(1, 4), P("Máquinas a activar o ampliar:", "body")]
     mq = c14["maquinas"]
@@ -1106,7 +1156,7 @@ def seccion_ejemplo(X, D, F):
     ps = sev["rec_despues"].mejor
     E += [H2("6.4 Caso grave: pedidos sin servir")]
     E += [P(f"Para forzar el desabastecimiento se parte de {K('estado_ejemplo()')} con el stock inicial reducido al SS (400 VE / 200 COMB) y se averían las 7 células VE "
-            f"({_cfg(SEV_CELULAS)}) desde las 06:00 hasta nuevo aviso. Resultado: el plan es <b>{ps.estado}</b> ({fm(ps.puntuacion, 2)} pts, "
+            f"({_cfg(SEV_CELULAS)}) desde las 06:00 hasta nuevo aviso. Resultado: el plan es <b>{ps.estado}</b> (Índice KWD {fm(ps.puntuacion, 2)}, "
             f"{fm(ps.kpis['piezas_no_servidas_total'], 0)} piezas sin servir). Las 7 piezas VE agotan el SS al servir el primer ciclo y se quedan sin stock a las 00:00 del 03/10; "
             "los pedidos pendientes aparecen en los ciclos de las 00:00, 01:30, 03:00 y 04:30.")]
     des = sev["desabastecimiento"]
@@ -1134,16 +1184,17 @@ def seccion_validacion(X, D, F):
         "célula 10 no se para; demanda por piezas y coches; camiones de 15 m²; expedición real; SS consumible con reposición; pedido no servido ⇒ CRITICO con aviso; "
         "R = tiempo muerto del personal presente; B = desviación respecto al óptimo; ida y vuelta de estado.json; personal entero, ids estables y baja de un trabajador; "
         "estado en tiempo real; eventos encadenados; contingencia de células y personas.",
-        "<b>Coherencia modelo–validador</b>: la puntuación del plan (calculada por modelo.evaluar) se recalcula en el validador y se compara con tolerancia 1e-4.",
+        "<b>Coherencia modelo–validador</b>: el Índice KWD del plan (calculado por modelo.evaluar) se recalcula en el validador y se compara con tolerancia 1e-4.",
     ])
     E += [H2("7.2 Limitaciones")]
     E += bullets([
-        "<b>Idoneidad.</b> Con 8 s por plan la demo no alcanza el óptimo probado (idoneidad 90–92 %); se informa del máximo alcanzable. Subir el límite mejora la cota, pero se mantiene en 8 s por decisión del equipo (D13).",
-        "<b>Gap abierto</b>: todos los planes de la demo son FACTIBLES (gap ≈ 8–10 % tras 8 s); los Top 2/3 pueden quedar por debajo del 50 % de idoneidad y descartarse en otros escenarios.",
+        f"<b>Idoneidad.</b> Con 8 s por plan los planes de la demo son FACTIBLES (no se demuestra el óptimo): idoneidad {fm(min(p.idoneidad for p in X['rec06'].top + X['rec14'].top), 1)}–{fm(max(p.idoneidad for p in X['rec06'].top + X['rec14'].top), 1)} %, es decir, el Índice KWD queda a un 2–5 % del máximo alcanzable demostrado. Se mantiene el límite de 8 s por decisión del equipo (D13, D21).",
+        "<b>Cota aproximada.</b> El Índice máximo alcanzable supone que los términos auxiliares del objetivo (arranques, penalizaciones) se mantienen; es una estimación, no una cota exacta del Índice KWD.",
+        "<b>Tramos del criterio B</b>: los factores (0/1/5/30 y 0/2) son una calibración del equipo (S31); con otros factores el equilibrio entre ocupar personal y no sobreproducir cambia.",
         "<b>Capacidad nominal.</b> La producción usa capacidad al 100 % (OEE) y no modela cambios de referencia, averías aleatorias ni mermas (S1, S29).",
         "<b>Personal.</b> Se asume que cualquier persona de un rol puede cubrir cualquier célula; no hay polivalencia limitada ni preferencias. Por defecto se descuenta un 5 % de absentismo si no hay fila de bajas (S6).",
         "<b>Horizonte de 24 h.</b> Una avería que dure más de lo que cubre el horizonte no se ve entera; el stock de seguridad puede aparecer «sin reponer» sólo porque el horizonte termina (S24).",
-        "<b>Cuello de botella en picking y carretilleros</b> (al 100 % en la demo): R sólo puede mejorar si hay más personal de esos roles o cargas menores.",
+        "<b>Cuello de botella en picking y carretilleros</b> (al 100 % en ≈ 15–22 h de 24 en la demo): R sólo puede mejorar si hay más personal de esos roles o cargas menores.",
         "<b>Contingencia a petición</b>: no recalcula sola; la reubicación se compara hora a hora con el plan previo y puede incluir cambios no ligados a la avería.",
     ])
     return E
@@ -1162,10 +1213,12 @@ def anexo_a(X, D):
 
 
 DIF = [
-    ("R usa N (CAMBIOS_V3 A1: R = Σ(Disp − N)/ΣDisp)", "Código (modelo._componentes_RQ, MILP): R = Σ(Disp − Σ req·u)/ΣDisp con la célula 10 la hora completa; N sólo interviene en Q y en el roster. Cambio posterior (commit ce2d6c6)."),
-    ("Gap relativo del 0,1 % (ESPECIFICACION §11, parámetro gap_relativo)", "Código: el solver recibe gapRel = 0 y gapAbs = gap_relativo × 0,5 × 1000 (absoluto); fase 1 con 2 %. El gap informado se recalcula con el objetivo completo (corrección reciente de modelo.py). Con 8 s los planes quedan FACTIBLES (idoneidad ≈ 90–92 %)."),
+    ("R usa N (CAMBIOS_V3 A1: R = Σ(Disp − N)/ΣDisp)", "Código (modelo._componentes_RQ, MILP): R = Σ(Disp − Σ req·u)/ΣDisp con la célula 10 la hora completa; N sólo interviene en Q y en el roster. Cambio posterior a la v3."),
+    ("Gap relativo del 0,1 % (ESPECIFICACION §11, parámetro gap_relativo)", "Código: el solver recibe gapRel = 0 y gapAbs = gap_relativo × 0,5 × 1000 (absoluto); fase 1 con 2 %. El gap informado se recalcula con el objetivo completo (corrección de modelo.py). Con 8 s los planes quedan FACTIBLES."),
     ("Estados OPTIMO/FACTIBLE tras la v3 (Top 1 «óptimo garantizado ±0,1 %»)", "Código: los planes de la demo son FACTIBLES; sólo OPTIMO si HiGHS cierra el gap dentro del tiempo."),
-    ("simular_semana: 10 s y gap 0,5 % (ESPECIFICACION §11)", "Código: tiempo ≤ 6 s por iteración y gap_relativo ≥ 0,005."),
+    ("simular_semana: 10 s y gap 0,5 % (ESPECIFICACION §11)", "Código: cada iteración usa el límite de la app (tiempo_limite_s = 8 s) y gap_relativo ≥ 0,005; admite un callback progreso(i, n)."),
+    ("Idoneidad = 100·(1 − gap) y «puntuación» (informes anteriores, ESPECIFICACION)", "Código: idoneidad = 100·Índice KWD / Índice máximo alcanzable (modelo.resolver); en un plan INVIABLE es None. Nombre visible: Índice KWD."),
+    ("B = media |I − óptimo|/óptimo (CAMBIOS_V3 A3)", "Código: B = media de la penalización por tramos (config.TRAMOS_EXCESO / TRAMOS_DEFECTO, penalizacion_tramos) dividida por el óptimo; no es el valor absoluto lineal."),
     ("Excel, flags, plan de referencia, condición terminal F18, colchón del 10 %", "Presentes aún en ESPECIFICACION.md y PLAN_EQUIPO.md pero eliminados del código (v3). config.HOJAS_COLUMNAS conserva el nombre «hojas» por herencia; no hay lectura de Excel."),
     ("data/estado.json = demo (CAMBIOS_V3 A6)", "El fichero del repositorio no coincide con datos.estado_ejemplo(): añade la semana del 05/10 y una demanda corregida del 05/10 (556 VE / 952 COMB)."),
     ("Absentismo (CAMBIOS_V2 A6) no citado en v3", "Código: sigue vigente; sin fila de bajas se resta round(estándar × 5 %), p. ej. 1 operario por turno en la demo salvo el turno T del 02/10, que tiene fila explícita."),

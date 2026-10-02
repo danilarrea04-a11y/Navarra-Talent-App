@@ -151,21 +151,25 @@ def main():
     el += [P("5. Qué busca (criterios con pesos KWD)", "h2"),
            P("Entre los planes posibles minimiza una suma ponderada de criterios normalizados (0 = ideal):")] + [
         caja_pesos()] + [
-        P("Puntuación = 100 × (1 − Σ peso<sub>i</sub> × criterio<sub>i</sub>)", "f"),
-        P("El <b>tiempo muerto real</b> es el personal presente menos el trabajo productivo, y el trabajo "
-          "productivo cuenta solo la fracción de la hora en que la célula produce. El <b>stock óptimo</b> es el "
-          "SS más la demanda de un turno, y se mide al cierre de cada turno (06, 14 y 22 h).")]
+        P("Índice KWD = 100 − 100 × Σ peso<sub>i</sub> × criterio<sub>i</sub>   (sirve para comparar planes; 100 no es alcanzable)", "f"),
+        P("El <b>tiempo muerto</b> se mide solo sobre el <b>trabajo productivo</b>: el personal presente menos la "
+          "fracción de la hora en que la célula realmente produce. El <b>stock óptimo</b> es el SS más la demanda "
+          "de un turno (D = demanda diaria / 3), y se mide al cierre de cada turno (06, 14 y 22 h)."),
+        P("<b>Desviación del stock por tramos</b> (en turnos de demanda D). <b>Exceso</b> sobre el óptimo: hasta "
+          "0,25 D gratis; de 0,25 a 0,5 D penaliza ×1; de 0,5 a 1 D ×5; por encima de 1 D ×30. <b>Defecto</b>: "
+          "hasta 0,25 D gratis y el resto ×2. Así se evita que una célula (p. ej. la C3) sobreproduzca solo para "
+          "mantener ocupado al personal; los tramos permiten únicamente una anticipación moderada de la producción.")]
 
     el += [P("6. Resolución", "h2"),
-           P("El solver <b>HiGHS</b> dispone de <b>8 s por plan</b>. La <b>idoneidad</b> = 100 · (1 − gap) indica "
-             "lo cerca que está el plan del mejor posible, y se informa también la <b>puntuación máxima "
-             "alcanzable</b>. Si no existe un plan que cumpla las reglas duras, no se inventa nada: se explica qué "
+           P("El solver <b>HiGHS</b> dispone de <b>8 s por plan</b>. La <b>idoneidad</b> = Índice KWD del plan / "
+             "<b>máximo índice alcanzable demostrado por el solver</b>, e indica lo cerca que está el plan del mejor "
+             "posible. Si no existe un plan que cumpla las reglas duras, no se inventa nada: se explica qué "
              "regla falla.")]
 
     el += [P("7. Top 1/2/3", "h2"),
            P("Tras el mejor plan se <b>prohíbe (corte) la configuración de células</b> que acaba de ganar y se "
-             "vuelve a resolver, obteniendo el Top 2 y el Top 3, <b>ordenados por puntuación</b>. Las alternativas "
-             "de baja calidad (<b>idoneidad < 50 %</b>) se descartan.")]
+             "vuelve a resolver, obteniendo el Top 2 y el Top 3, <b>ordenados por Índice KWD</b>. Las alternativas "
+             "cuyo <b>gap del solver supera el 50 %</b> se descartan.")]
 
     el += [P("8. Comprobación y explicación", "h2"),
            P("Un <b>validador independiente</b> recalcula todas las reglas sobre el plan final. Después se explica "
@@ -184,7 +188,7 @@ def main():
         ("Qué activar", "Las células y personas de cada hora que cumplen todas las reglas y ocupan al máximo al personal presente."),
         ("Por qué", "Para servir todos los camiones sin bajar del stock de seguridad y acercarse al stock óptimo."),
         ("Con qué impacto", "Menos tiempo muerto, menos m² de almacén y menos energía que las alternativas Top 2/3."),
-        ("Qué tan buena es", "Puntuación sobre 100 con su máximo alcanzable e idoneidad = 100 · (1 − gap).")])])]
+        ("Qué tan buena es", "Índice KWD del plan frente al máximo alcanzable demostrado; idoneidad = índice / máximo.")])])]
 
     doc = BaseDocTemplate(str(SALIDA), pagesize=A4, leftMargin=1.8 * cm, rightMargin=1.8 * cm, topMargin=1.7 * cm,
                           bottomMargin=1.6 * cm, title="KWD - Lógica del MILP", author="Equipo KWD")
@@ -199,7 +203,7 @@ def caja_pesos():
     datos = [("50 %", "<b>Tiempo muerto real</b> de todo el personal presente (objetivo principal)"),
              ("20 %", "Menos m² de almacén ocupados"),
              ("15 %", "Más margen de calidad y mantenimiento"),
-             ("10 %", "Menor desviación respecto al stock óptimo (SS + un turno de demanda) al cierre de turno"),
+             ("10 %", "Menor desviación (por tramos) respecto al stock óptimo (SS + un turno de demanda) al cierre de turno"),
              ("5 %", "Menor coste energético (franja solar 11-14 h; la noche es más cara)")]
     t = Table([[P(f"<b>{a}</b>", "cel"), P(b, "cel")] for a, b in datos], colWidths=[1.8 * cm, 15.6 * cm])
     t.setStyle(TableStyle([("ROWBACKGROUNDS", (0, 0), (-1, -1), [ZEBRA, colors.white]),
