@@ -14,6 +14,8 @@ from .horizonte import Horizonte, construir_horizonte
 from .modelo import ModeloInfactible, preparar, resolver
 from .plan import Plan
 
+IDONEIDAD_MIN_ALTERNATIVA = 50.0  # % mínimo para mostrar un Top 2/3
+
 
 @dataclass
 class Recomendacion:
@@ -204,6 +206,10 @@ def recomendar(esc: Escenario, inicio, horas=None, top_k: int = 3, previo=None) 
     # KWD define Top 1 como la alternativa viable con mejor puntuación global: el objetivo del MILP
     # incluye penalizaciones auxiliares (arranques, cobertura final), así que se reordena por puntuación.
     top.sort(key=lambda p: p.puntuacion, reverse=True)
+    # Las alternativas (Top 2/3) cuya resolución quedó muy lejos del óptimo en el tiempo límite no se presentan:
+    # compararían el Top 1 con planes que el solver no ha llegado a mejorar.
+    descartadas = [p for p in top[1:] if p.idoneidad is not None and p.idoneidad < IDONEIDAD_MIN_ALTERNATIVA]
+    top = top[:1] + [p for p in top[1:] if p not in descartadas]
     for j, p in enumerate(top):
         p.nombre = f"Top {j + 1}"
     if not top and contingencia is None:
@@ -217,5 +223,8 @@ def recomendar(esc: Escenario, inicio, horas=None, top_k: int = 3, previo=None) 
     principal = top[0] if top else contingencia
     expl = _explicar(esc, hz, principal, top, baseline)
     al = _alertas(esc, hz, principal, top, contingencia, top_k)
+    if descartadas:
+        al.append(f"Se han descartado {len(descartadas)} alternativa(s) cuya solución en el tiempo límite tenía una "
+                  f"idoneidad inferior al {IDONEIDAD_MIN_ALTERNATIVA:.0f} %.")
     return Recomendacion(inicio=hz.inicio, horizonte=hz, top=top, contingencia=contingencia,
                          baseline=baseline, explicacion=expl, alertas=al, tiempo_total_s=time.perf_counter() - t0)

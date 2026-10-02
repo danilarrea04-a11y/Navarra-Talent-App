@@ -196,6 +196,13 @@ def reconfigurar(esc: Escenario, rec: Recomendacion, evento: Evento, ahora):
 
 
 # --- estado en tiempo real -------------------------------------------------------------------
+# Nombre de cada rol en singular y plural para los textos de la contingencia.
+_NOMBRE_ROL = {"operarios": ("operario", "operarios"), "picking": ("trabajador de picking", "trabajadores de picking"),
+               "carretilleros": ("carretillero", "carretilleros"), "mto": ("técnico de mantenimiento",
+                                                                          "técnicos de mantenimiento"),
+               "calidad": ("trabajador de calidad", "trabajadores de calidad")}
+
+
 def _fmt_h(ts) -> str:
     return f"{pd.Timestamp(ts):%H:%M}"
 
@@ -360,8 +367,11 @@ def contingencia_celula(esc: Escenario, rec: Recomendacion, celula: int, desde, 
             pers = g["persona"].unique()
             destinos = "; ".join(f"{x['persona']} → {x['a_celulas']} ({_fmt_h(x['desde'])}-{_fmt_h(x['hasta'])})"
                                  for _, x in g.iterrows())
-            quien = "operarios" if r == "operarios" else f"trabajadores de {r}"
-            res.append(f"Los {len(pers)} {quien} de la C{celula} pasan a: {destinos}.")
+            singular, plural = _NOMBRE_ROL.get(r, (f"trabajador de {r}", f"trabajadores de {r}"))
+            if len(pers) == 1:
+                res.append(f"El {singular} de la C{celula} pasa a: {destinos}.")
+            else:
+                res.append(f"Los {len(pers)} {plural} de la C{celula} pasan a: {destinos}.")
         otros = reubic[~reubic["de_celula"].str.contains(f"C{celula}(?!\\d)", regex=True)]
         for _, x in otros.iterrows():
             res.append(f"{x['persona']} cambia de {x['de_celula']} a {x['a_celulas']} "

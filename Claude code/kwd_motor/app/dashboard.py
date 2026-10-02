@@ -594,7 +594,12 @@ with tabs[2]:
     c1, c2, c3, c4 = st.columns([1.2, 1, 1, 2])
     c1.markdown("**Estado**<br>" + badge(estado_txt if es_contingencia else str(plan.estado), col_estado),
                 unsafe_allow_html=True)
-    c2.metric("Puntuación", f"{plan.puntuacion:.1f} / 100")
+    techo = (plan.kpis or {}).get("puntuacion_max_teorica")
+    c2.metric("Puntuación", f"{plan.puntuacion:.1f} / 100",
+              None if techo is None else f"máximo alcanzable ≈ {techo:.1f}", delta_color="off",
+              help=("Puntuación máxima teórica: ningún plan posible puede superarla según la cota demostrada "
+                    "por el solver (aproximada). El plan recomendado está, como mucho, a "
+                    f"{techo - plan.puntuacion:.1f} puntos del óptimo." if techo is not None else None))
     c3.metric("Idoneidad (óptimo garantizado ±gap)", "—" if plan.idoneidad is None else f"{plan.idoneidad:.1f} %",
               help=("No aplica: plan de contingencia" if plan.idoneidad is None else
                     f"Gap relativo del solver: {100 * (plan.gap or 0):.2f} %"))
@@ -709,6 +714,8 @@ with tabs[5]:
     for n, p in opciones:
         filas.append({"Plan": n, "Estado": str(p.estado), "Puntuación": round(p.puntuacion, 2),
                       "Idoneidad %": "—" if p.idoneidad is None else fnum(p.idoneidad, 1),
+                      "Máx. alcanzable": ("—" if (p.kpis or {}).get("puntuacion_max_teorica") is None
+                                          else fnum(p.kpis["puntuacion_max_teorica"], 1)),
                       "Células turno actual": ", ".join(str(int(c)) for c in (p.config_turno_actual or [])) or "—",
                       "m² medios": round(float(np.mean(p.espacio.values)), 1),
                       "kWh": round(float(np.sum(p.energia_kwh.values)), 1)})

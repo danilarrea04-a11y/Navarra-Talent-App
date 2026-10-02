@@ -528,4 +528,10 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
                    holguras={"stock": hol_n, "ss": hol_s, "espacio": hol_a}, previo=previo)
     plan.objetivo = float(info.objective_function_value) / ESCALA_OBJ
     plan.tiempo_s = time.perf_counter() - t_ini
+    if plan.viable and plan.gap is not None:
+        # Margen máximo de mejora en puntos = 100 × (objetivo − cota del solver). Aproximado: supone que los
+        # términos auxiliares del objetivo (arranques, horas libres, cobertura final) se mantienen.
+        margen = 100.0 * plan.objetivo * plan.gap
+        plan.kpis["margen_mejora_max"] = margen
+        plan.kpis["puntuacion_max_teorica"] = min(100.0, plan.puntuacion + margen)
     return plan

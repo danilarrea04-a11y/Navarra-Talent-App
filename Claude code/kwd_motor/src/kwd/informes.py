@@ -341,14 +341,18 @@ def kpi_lista(plan) -> list:
          f"{g2('piezas_comb_a_expedir', 'chasis_comb_a_expedir', d=0)} / "
          f"{g2('piezas_comb_cubiertas', 'piezas_comb_cubiertos', 'chasis_comb_cubiertos', d=0)}", "Demanda"),
     ]
-    # KPIs de camiones y de desperdicio de personal (nombres tolerantes a la versión del motor)
-    for clave, v in k.items():
-        kn = str(clave).lower()
-        if isinstance(v, (int, float, np.floating, np.integer)) and not isinstance(v, bool):
-            if "camion" in kn:
-                out.append((str(clave).replace("_", " ").capitalize(), _f(v, 1), "Expediciones"))
-            elif any(s in kn for s in ("plantilla", "libre", "excedente")):
-                out.append((str(clave).replace("_", " ").capitalize(), _f(v, 1), "Personal"))
+    # KPIs de camiones y de plantilla con etiquetas legibles (sin duplicar las tarjetas propias del dashboard)
+    out += [
+        ("Camiones en el horizonte", g("camiones", 0), "Expediciones"),
+        ("Camiones por ciclo (media / máx.)",
+         f"{g('camiones_por_ciclo_medio', 1)} / {g('camiones_por_ciclo_max', 0)}", "Expediciones"),
+        ("Horas libres de la plantilla (total)", g("horas_libres_total", 0, " h"), "Personal"),
+        ("Personal excedente reubicable (total)", g("excedente_total", 0), "Personal"),
+    ]
+    for r, n in (("operarios", "operarios"), ("picking", "picking"), ("carretilleros", "carretilleros"),
+                 ("mto", "mantenimiento"), ("calidad", "calidad")):
+        if k.get(f"horas_libres_{r}") is not None:
+            out.append((f"Horas libres plantilla ({n})", g(f"horas_libres_{r}", 0, " h"), "Personal"))
     for nom, v in kpis_desperdicio(plan):
         out.append((f"Desperdicio de personal ({nom})", _f(v, 1) + " h", "Recursos"))
     for r, n in (("operarios", "Operarios"), ("picking", "Picking"), ("carretilleros", "Carretilleros"),
