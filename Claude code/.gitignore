@@ -9,3 +9,5 @@ __pycache__/
 # Perfiles de rendimiento
 prof.out
 *.prof
+# Vídeos de demostración (no se suben)
+*.mp4
