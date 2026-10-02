@@ -413,7 +413,8 @@ def contingencia(esc: Escenario, rec: Recomendacion, ahora, bajas_celulas: list 
                 pers = g["persona"].unique()
                 filas_d = [f"{x['persona']} → {x['a_celulas'] or 'LIBRE'} ({_fmt_h(x['desde'])}-{_fmt_h(x['hasta'])})"
                            for _, x in g.iterrows()]
-                destinos = "; ".join(filas_d[:4]) + (f"; y {len(filas_d) - 4} cambios más" if len(filas_d) > 4 else "")
+                destinos = "; ".join(filas_d[:4]) + (f"; y {len(filas_d) - 4} cambio{'s' if len(filas_d) - 4 > 1 else ''} más"
+                                                     if len(filas_d) > 4 else "")
                 singular, plural = _NOMBRE_ROL.get(r, (f"trabajador de {r}", f"trabajadores de {r}"))
                 res.append(f"El {singular} de la C{c} pasa a: {destinos}." if len(pers) == 1
                            else f"Los {len(pers)} {plural} de la C{c} pasan a: {destinos}.")
