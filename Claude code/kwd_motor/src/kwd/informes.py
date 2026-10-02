@@ -620,8 +620,8 @@ def generar_informe_pdf(rec, esc, ruta, contingencia=None) -> str:
                                 ("TOPPADDING", (0, 0), (-1, -1), 12), ("BOTTOMPADDING", (0, 0), (-1, -1), 12)]))
     story += [bloque, Spacer(1, 8)]
     portada = [["Inicio del plan", f"{inicio:%d/%m/%Y %H:%M}", "Turno actual", _turno_nombre(turno_act)],
-               ["Estado", f'<font color="{col_est}"><b>{est}</b></font>', "Puntuación global", f"<b>{_f(plan.puntuacion, 1)}</b> / 100"],
-               ["Idoneidad (óptimo garantizado ±gap)",
+               ["Estado", f'<font color="{col_est}"><b>{est}</b></font>', "Índice KWD", f"<b>{_f(plan.puntuacion, 1)}</b>"],
+               ["Idoneidad (sobre el máximo alcanzable)",
                 "<b>—</b> (No aplica: plan de contingencia)" if plan.idoneidad is None
                 else f"<b>{_f(plan.idoneidad, 1)} %</b>", "Horizonte", f"{len(horas)} h"]]
     techo = (plan.kpis or {}).get("puntuacion_max_teorica")
@@ -823,12 +823,12 @@ def generar_informe_pdf(rec, esc, ruta, contingencia=None) -> str:
         if v is None:
             v = (plan.contribuciones or {}).get(NOMBRE_CRIT[kk])
         filas.append([NOMBRE_CRIT[kk], f"{PESOS[kk]} %", _f(v, 2) if v is not None else "—"])
-    filas.append(["<b>Puntuación global</b>", "100 %", f"<b>{_f(plan.puntuacion, 2)}</b>"])
+    filas.append(["<b>Índice KWD</b>", "100 %", f"<b>{_f(plan.puntuacion, 2)}</b>"])
     story.append(_tabla(filas, [ancho * 0.5, ancho * 0.2, ancho * 0.3], ss))
 
     # ---- alternativas
     story.append(Paragraph("Alternativas (Top 1/2/3)", ss["H1k"]))
-    filas = [["Plan", "Estado", "Puntuación", "Idoneidad %", "Células activas (turno actual)", "m² medios", "kWh"]]
+    filas = [["Plan", "Estado", "Índice KWD", "Idoneidad %", "Células activas (turno actual)", "m² medios", "kWh"]]
     opciones = [(f"Top {i + 1}", p_) for i, p_ in enumerate(rec.top)]
     if es_contingencia:
         opciones.append(("Contingencia", rec.contingencia))

@@ -197,7 +197,7 @@ def recomendar(esc: Escenario, inicio, horas=None, top_k: int = 3, previo=None) 
     top.sort(key=lambda p: (round(p.kpis.get("piezas_no_servidas_total", 0.0)), -p.puntuacion))
     # Las alternativas (Top 2/3) cuya resolución quedó muy lejos del óptimo en el tiempo límite no se presentan:
     # compararían el Top 1 con planes que el solver no ha llegado a mejorar.
-    descartadas = [p for p in top[1:] if p.idoneidad is not None and p.idoneidad < IDONEIDAD_MIN_ALTERNATIVA]
+    descartadas = [p for p in top[1:] if p.gap is not None and 100.0 * (1.0 - p.gap) < IDONEIDAD_MIN_ALTERNATIVA]
     top = top[:1] + [p for p in top[1:] if p not in descartadas]
     for j, p in enumerate(top):
         p.nombre = f"Top {j + 1}"
@@ -208,7 +208,7 @@ def recomendar(esc: Escenario, inicio, horas=None, top_k: int = 3, previo=None) 
     al = _alertas(esc, hz, principal, top, contingencia, top_k)
     if descartadas:
         al.append(f"Se han descartado {len(descartadas)} alternativa(s) cuya solución en el tiempo límite tenía una "
-                  f"idoneidad inferior al {IDONEIDAD_MIN_ALTERNATIVA:.0f} %.")
+                  f"cota del solver demasiado lejana (gap > {100 - IDONEIDAD_MIN_ALTERNATIVA:.0f} %).")
     return Recomendacion(inicio=hz.inicio, horizonte=hz, top=top, contingencia=contingencia,
                          explicacion=expl, alertas=al, tiempo_total_s=time.perf_counter() - t0,
                          aviso_direccion=principal.aviso_direccion)

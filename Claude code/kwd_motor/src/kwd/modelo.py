@@ -582,4 +582,9 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
         margen = 100.0 * plan.objetivo * plan.gap
         plan.kpis["margen_mejora_max"] = margen
         plan.kpis["puntuacion_max_teorica"] = min(100.0, plan.puntuacion + margen)
+        # Idoneidad = puntuación del plan / puntuación máxima alcanzable demostrada por el solver: qué parte de lo
+        # mejor que se puede conseguir con estos recursos y esta demanda consigue el plan.
+        maxi = plan.kpis["puntuacion_max_teorica"]
+        plan.idoneidad = 100.0 if maxi <= 1e-9 else min(100.0, 100.0 * plan.puntuacion / maxi)
+        plan.kpis["idoneidad"] = plan.idoneidad
     return plan

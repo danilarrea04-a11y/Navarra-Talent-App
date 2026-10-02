@@ -353,13 +353,6 @@ with T["Datos"]:
                "«Calcular plan» en la barra lateral para obtener el plan con estos datos.")
     cel_ids = [int(c) for c in esc_in.celulas["celula"] if int(c) != config.CELULA_LOGISTICA]
 
-    if st.button("Restaurar ejemplo", key="restaurar_ejemplo",
-                 help="Descarta los datos actuales y vuelve al escenario de demostración."):
-        restablecer_entrada(datos.estado_ejemplo())
-        st.session_state.esc = st.session_state.rec = st.session_state.cont = st.session_state.semana = None
-        st.session_state.historial = []
-        st.session_state.dirty = False
-        st.rerun()
 
     t_dem, t_baj, t_par, t_oper = st.tabs(["Demanda", "Bajas por turno", "Paradas programadas", "Stock y expediciones"])
     with t_dem:
@@ -534,7 +527,7 @@ def mostrar_antes_despues(a, n, titulo="Antes / después"):
     st.markdown(f"#### {titulo}")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Horas libres (total)", fnum(hn["total"], 0, " h"), f"{hn['total'] - ha['total']:+.0f} h", delta_color="inverse")
-    m2.metric("Puntuación", f"{pn.puntuacion:.1f}", f"{pn.puntuacion - pa.puntuacion:+.1f}")
+    m2.metric("Índice KWD", f"{pn.puntuacion:.1f}", f"{pn.puntuacion - pa.puntuacion:+.1f}")
     m3.metric("Estado", str(pn.estado), f"antes: {pa.estado}", delta_color="off")
     m4.metric("Células activas turno", str(len(pn.config_turno_actual or [])),
               f"antes: {len(pa.config_turno_actual or [])}", delta_color="off")
@@ -748,16 +741,18 @@ with T["Recomendación"]:
     c1.markdown("**Estado**<br>" + badge(estado_txt if es_contingencia else str(plan.estado), col_estado),
                 unsafe_allow_html=True)
     techo = (plan.kpis or {}).get("puntuacion_max_teorica")
-    c2.metric("Puntuación", f"{plan.puntuacion:.1f} / 100",
-              None if techo is None else f"máximo alcanzable ≈ {techo:.1f}", delta_color="off",
-              help=("Puntuación máxima alcanzable: ningún plan posible puede superarla según la cota demostrada "
-                    "por el solver (aproximada). El plan recomendado está, como mucho, a "
-                    f"{techo - plan.puntuacion:.1f} puntos del óptimo." if techo is not None else None))
-    c3.metric("Idoneidad (óptimo garantizado ±gap)", "—" if plan.idoneidad is None else f"{plan.idoneidad:.1f} %",
+    c2.metric("Idoneidad", "—" if plan.idoneidad is None else f"{plan.idoneidad:.1f} %",
               help=("No aplica: plan de contingencia" if plan.idoneidad is None else
-                    f"Gap relativo del solver: {100 * (plan.gap or 0):.2f} %"))
+                    "Qué parte de lo mejor que se puede conseguir con estos recursos y esta demanda consigue el plan: "
+                    "índice KWD del plan / índice máximo alcanzable, que el solver demuestra que ningún plan "
+                    "posible puede superar."))
     if plan.idoneidad is None:
-        c3.caption("No aplica: plan de contingencia")
+        c2.caption("No aplica: plan de contingencia")
+    c3.metric("Índice KWD", f"{plan.puntuacion:.1f}",
+              None if techo is None else f"máximo alcanzable ≈ {techo:.1f}", delta_color="off",
+              help="Criterios KWD ponderados (50 % tiempo muerto, 20 % espacio, 15 % calidad y mantenimiento, "
+                   "10 % stock óptimo, 5 % energía). Con estos recursos y esta demanda el 100 no es alcanzable: "
+                   "sirve para comparar planes entre sí.")
     c4.markdown("**Células a activar en este turno**<br>" +
                 " ".join(f'<span class="estado" style="background:{G.COLOR_TIPO.get(tp.get(int(c)), G.AZUL)}">C{int(c)}</span>'
                          for c in (plan.config_turno_actual or [])) or "ninguna", unsafe_allow_html=True)
@@ -814,11 +809,11 @@ with T["Recomendación"]:
 with T["KPIs"]:
     st.subheader("Indicadores clave del plan recomendado")
     kpi_principal(plan)
-    st.markdown("**Puntuación**")
+    st.markdown("**Calidad del plan**")
     q1, q2, q3 = st.columns(3)
-    q1.metric("Puntuación", f"{plan.puntuacion:.1f} / 100")
-    q2.metric("Máximo alcanzable", "—" if techo is None else f"≈ {techo:.1f}")
-    q3.metric("Idoneidad", "—" if plan.idoneidad is None else f"{plan.idoneidad:.1f} %")
+    q1.metric("Idoneidad", "—" if plan.idoneidad is None else f"{plan.idoneidad:.1f} %")
+    q2.metric("Índice KWD", f"{plan.puntuacion:.1f}")
+    q3.metric("Índice máximo alcanzable", "—" if techo is None else f"≈ {techo:.1f}")
     svo = stock_opt_tabla(plan, rec, esc)
     rs = informes.resumen_stock_optimo(svo)
     st.markdown("**Stock frente al óptimo en los cierres de turno (06:00, 14:00, 22:00)**")
@@ -892,7 +887,7 @@ with T["Alternativas"]:
         opciones.append(("Contingencia", rec.contingencia))
     filas = []
     for n, p in opciones:
-        filas.append({"Plan": n, "Estado": str(p.estado), "Puntuación": round(p.puntuacion, 2),
+        filas.append({"Plan": n, "Estado": str(p.estado), "Índice KWD": round(p.puntuacion, 2),
                       "Horas libres": round(informes.horas_libres(p)["total"], 0),
                       "Idoneidad %": "—" if p.idoneidad is None else fnum(p.idoneidad, 1),
                       "Máx. alcanzable": ("—" if (p.kpis or {}).get("puntuacion_max_teorica") is None
@@ -902,7 +897,7 @@ with T["Alternativas"]:
                       "kWh": round(float(np.sum(p.energia_kwh.values)), 1)})
     st.dataframe(pd.DataFrame(filas), width="stretch", hide_index=True)
     colores = [G.VERDE if n.startswith("Top") else G.ROJO for n, _ in opciones]
-    pc(G.comparar_barras([n for n, _ in opciones], [p.puntuacion for _, p in opciones], "Puntuación", colores),
+    pc(G.comparar_barras([n for n, _ in opciones], [p.puntuacion for _, p in opciones], "Índice KWD", colores),
        width="stretch")
     pc(G.comparar_barras([n for n, _ in opciones], [informes.horas_libres(p)["total"] for _, p in opciones],
                          "Horas libres (menos es mejor)", colores), width="stretch")
