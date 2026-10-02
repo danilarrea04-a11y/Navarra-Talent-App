@@ -524,11 +524,22 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
     hay_sol, optimo, info, ms = _resolver_fase(tl, gap_f if gap_f is not None else gap_rel, inicial)
     if not hay_sol:
         raise ModeloInfactible(f"HiGHS terminó sin solución (estado {ms}).")
-    g = info.mip_gap
-    if g is not None and math.isfinite(g):
-        gap = max(0.0, float(g))
+    # HiGHS no incluye el término constante del objetivo (p. ej. el "1 −" de R), así que su gap relativo se mide
+    # sobre una base equivocada. Se recalcula con el objetivo completo: valor del plan (PuLP, con constante) y cota
+    # del solver desplazada por la misma constante.
+    primal_sol = float(info.objective_function_value)
+    try:
+        primal = float(pulp.value(prob.objective))
+    except Exception:
+        primal = primal_sol
+    desplaz = primal - primal_sol
+    cota = float(getattr(info, "mip_dual_bound", float("nan"))) + desplaz
+    if optimo:
+        gap = 0.0
+    elif math.isfinite(cota) and primal > 1e-9:
+        gap = min(1.0, max(0.0, (primal - cota) / primal))
     else:
-        gap = 0.0 if optimo else 1.0
+        gap = 1.0
 
     av = np.array([[round(a[c, h].value() or 0) for c in todas] for h in range(H)], dtype=float)
     if not entero:  # fase 1: sólo interesa la activación (semilla de la fase 2)
@@ -548,11 +559,11 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
     plan = evaluar(esc, hz, pd.DataFrame(av, index=hz.slots.index, columns=todas),
                    pd.DataFrame(uv, index=hz.slots.index, columns=todas), estado=estado, gap=gap,
                    holguras={"stock": hol_n, "ss": hol_s, "espacio": hol_a}, previo=previo)
-    plan.objetivo = float(info.objective_function_value) / ESCALA_OBJ
+    plan.objetivo = primal / ESCALA_OBJ
     plan.tiempo_s = time.perf_counter() - t_ini
     if plan.viable and plan.gap is not None:
         # Margen máximo de mejora en puntos = 100 × (objetivo − cota del solver). Aproximado: supone que los
-        # término de arranques se mantiene.
+        # términos auxiliares del objetivo (arranques, penalizaciones de stock) se mantienen.
         margen = 100.0 * plan.objetivo * plan.gap
         plan.kpis["margen_mejora_max"] = margen
         plan.kpis["puntuacion_max_teorica"] = min(100.0, plan.puntuacion + margen)
