@@ -461,11 +461,15 @@ def contingencia_celula(esc: Escenario, rec: Recomendacion, celula: int, desde, 
     return contingencia(esc, rec, desde, bajas_celulas=[{"celula": int(celula), "desde": desde, "hasta": hasta}])
 
 
-def simular_semana(esc: Escenario, lunes, iteraciones: int = 15) -> pd.DataFrame:
-    """Simula una semana con horizonte rodante: 15 turnos desde el lunes 06:00 (`iteraciones` para acotar)."""
+def simular_semana(esc: Escenario, lunes, iteraciones: int = 15, progreso=None) -> pd.DataFrame:
+    """Simula una semana con horizonte rodante: 15 turnos desde el lunes 06:00 (`iteraciones` para acotar).
+
+    Cada turno exige resolver el MILP de 24 h y depende del stock que deja el anterior, así que las iteraciones
+    son secuenciales; cada resolución usa el mismo límite de tiempo que la app (coherencia de resultados).
+    `progreso(i, n)` se llama tras cada iteración.
+    """
     inicio = pd.Timestamp(lunes).normalize() + pd.Timedelta(hours=6)
     e = esc.copiar()
-    e.parametros["tiempo_limite_s"] = min(float(e.parametros["tiempo_limite_s"]), 6.0)
     e.parametros["gap_relativo"] = max(float(e.parametros.get("gap_relativo", 0.001)), 0.005)
     filas = []
     for it in range(iteraciones):
@@ -482,4 +486,6 @@ def simular_semana(esc: Escenario, lunes, iteraciones: int = 15) -> pd.DataFrame
         filas.append(fila)
         _fijar_stock(e, {int(c): float(v) for c, v in plan.stock.iloc[idx[-1]].items()})
         inicio = inicio + pd.Timedelta(hours=len(idx))
+        if progreso is not None:
+            progreso(it + 1, iteraciones)
     return pd.DataFrame(filas)

@@ -77,3 +77,30 @@ PESO_PARAM = {
 }
 
 TOL = 1e-6
+
+
+# Penalización por tramos de la desviación respecto al stock óptimo al cierre de turno (criterio B).
+# Los tramos se miden en turnos de demanda de la pieza (D = demanda diaria / 3 = óptimo − SS) y cada tramo
+# es más caro que el anterior (convexo: el solver llena primero los baratos, sin variables binarias).
+# Factor ≈ 5 es el punto de equilibrio frente a ocupar personal: por debajo compensa adelantar producción;
+# por encima, no. (ancho en múltiplos de D o None = sin límite, factor por pieza)
+TRAMOS_EXCESO = [(0.25, 0.0), (0.25, 1.0), (0.5, 5.0), (None, 30.0)]   # stock por encima del óptimo
+TRAMOS_DEFECTO = [(0.25, 0.0), (None, 2.0)]                            # stock por debajo (bajo SS: además pen_ss)
+
+
+def penalizacion_tramos(desv, turno):
+    """Penalización por tramos (en piezas equivalentes) de la desviación `desv` = stock − óptimo.
+
+    `turno` = demanda de un turno de la pieza (D). Acepta escalares o arrays numpy del mismo tamaño.
+    """
+    import numpy as _np
+    desv = _np.asarray(desv, dtype=float)
+    D = _np.maximum(_np.asarray(turno, dtype=float), 1.0)
+    total = _np.zeros_like(desv)
+    for tramos, x in ((TRAMOS_EXCESO, _np.maximum(desv, 0.0)), (TRAMOS_DEFECTO, _np.maximum(-desv, 0.0))):
+        resto = x.copy()
+        for ancho, factor in tramos:
+            tramo = resto if ancho is None else _np.minimum(resto, ancho * D)
+            total = total + factor * tramo
+            resto = resto - tramo
+    return total

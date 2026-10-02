@@ -338,7 +338,7 @@ rec = st.session_state.rec
 esc = st.session_state.esc
 
 NOM_TABS = ["Datos", "Planta en tiempo real", "Trabajadores", "Recomendación", "KPIs", "Overview 24 h", "Alternativas",
-            "Contingencia", "Semana", "Informe"]
+            "Contingencia", "Semana"]
 _tabs = st.tabs(NOM_TABS)
 T = dict(zip(NOM_TABS, _tabs))
 
@@ -363,53 +363,26 @@ with T["Datos"]:
 
     t_dem, t_baj, t_par, t_oper = st.tabs(["Demanda", "Bajas por turno", "Paradas programadas", "Stock y expediciones"])
     with t_dem:
-        h1, h2, h3, h4 = st.columns([1, 1.2, 1.2, 1])
-        coches = h1.number_input("Coches/día", min_value=0, value=1500, step=100, key="coches_dia")
-        ratio = h2.number_input("Ratio COMB : VE", min_value=0.0, value=2.0, step=0.5, key="ratio_cv")
-        modo_d = h3.radio("Rellenar", ["Semana", "Un día"], horizontal=True, key="modo_dem")
-        fecha_d = h4.date_input("Fecha / lunes", value=pd.Timestamp(inicio).date(), key="fecha_dem")
-        if st.button("Rellenar desde coches/día", key="rellenar_dem"):
-            try:
-                pve, pcomb = datos.demanda_desde_coches(float(coches), float(ratio))
-                nuevo = st.session_state.esc_in.copiar()
-                f = pd.Timestamp(fecha_d).normalize()
-                if modo_d == "Semana":
-                    lunes_ = f - pd.Timedelta(days=f.weekday())
-                    dsem = _tipar(get_hoja(nuevo, "DemandaSemanal"), fechas=["semana_inicio"])
-                    dsem = dsem[dsem["semana_inicio"] != lunes_]
-                    dsem = pd.concat([dsem, pd.DataFrame([{"semana_inicio": lunes_, "piezas_ve": pve * 5,
-                                                           "piezas_comb": pcomb * 5}])], ignore_index=True)
-                    set_hoja(nuevo, "DemandaSemanal", dsem)
-                else:
-                    dd = _tipar(get_hoja(nuevo, "CorreccionDiaria"), fechas=["fecha"])
-                    dd = dd[dd["fecha"] != f]
-                    dd = pd.concat([dd, pd.DataFrame([{"fecha": f, "piezas_ve": pve, "piezas_comb": pcomb}])],
-                                   ignore_index=True)
-                    set_hoja(nuevo, "CorreccionDiaria", dd)
-                restablecer_entrada(nuevo)
-                st.session_state.dirty = True
-                st.rerun()
-            except Exception as e:  # noqa: BLE001
-                if type(e).__name__ in ("RerunException", "StopException"):
-                    raise
-                st.error(f"No se pudo rellenar la demanda: {e}")
-                with st.expander("Detalle técnico"):
-                    st.code(traceback.format_exc())
-        st.caption("2 : 1 significa el doble de piezas de combustión que eléctricas. «Coches/día» se convierte en piezas "
-                   "de cada referencia del tipo; la demanda semanal se reparte en 5 días laborables.")
-        cs, cd = st.columns(2)
-        with cs:
-            st.markdown("**Demanda semanal (5 días laborables, piezas por tipo)**")
-            dem_ed = st.data_editor(src["dsem"], num_rows="dynamic", width="stretch", key=f"ed_dsem_{ev}", column_config={
-                "semana_inicio": st.column_config.DateColumn("Lunes de la semana", format="DD/MM/YYYY"),
-                "piezas_ve": st.column_config.NumberColumn("Piezas VE (de cada pieza, semana)", min_value=0),
-                "piezas_comb": st.column_config.NumberColumn("Piezas COMB (de cada pieza, semana)", min_value=0)})
-        with cd:
-            st.markdown("**Demanda corregida confirmada del día (piezas por tipo)**")
-            cor_ed = st.data_editor(src["cor"], num_rows="dynamic", width="stretch", key=f"ed_dcor_{ev}", column_config={
-                "fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
-                "piezas_ve": st.column_config.NumberColumn("Piezas VE (de cada pieza, día)", min_value=0),
-                "piezas_comb": st.column_config.NumberColumn("Piezas COMB (de cada pieza, día)", min_value=0)})
+        lunes_p = pd.Timestamp(inicio).normalize()
+        lunes_p = lunes_p - pd.Timedelta(days=lunes_p.weekday())
+        dia_p = pd.Timestamp(inicio).normalize()
+        _dsem = _limpia_dem(_tipar(get_hoja(st.session_state.esc_in, "DemandaSemanal"), fechas=["semana_inicio"]), "semana_inicio")
+        _dcor = _limpia_dem(_tipar(get_hoja(st.session_state.esc_in, "CorreccionDiaria"), fechas=["fecha"]), "fecha")
+        _fs = _dsem[_dsem["semana_inicio"] == lunes_p]
+        _fc = _dcor[_dcor["fecha"] == dia_p]
+        sk = f"{lunes_p:%Y%m%d}_{ev}"
+        st.markdown(f"**Demanda semanal** (semana del lunes {lunes_p:%d/%m/%Y}, piezas de cada referencia del tipo)")
+        w1, w2 = st.columns(2)
+        sem_ve = w1.number_input("Piezas VE / semana", min_value=0.0, step=100.0,
+                                 value=float(_fs["piezas_ve"].iloc[-1]) if len(_fs) else 0.0, key=f"dem_sem_ve_{sk}")
+        sem_cb = w2.number_input("Piezas COMB / semana", min_value=0.0, step=100.0,
+                                 value=float(_fs["piezas_comb"].iloc[-1]) if len(_fs) else 0.0, key=f"dem_sem_cb_{sk}")
+        st.markdown(f"**Demanda corregida del día** ({dia_p:%d/%m/%Y}; 0 = sin corrección)")
+        d1, d2 = st.columns(2)
+        dia_ve = d1.number_input("Piezas VE (día)", min_value=0.0, step=10.0,
+                                 value=float(_fc["piezas_ve"].iloc[-1]) if len(_fc) else 0.0, key=f"dem_dia_ve_{sk}")
+        dia_cb = d2.number_input("Piezas COMB (día)", min_value=0.0, step=10.0,
+                                 value=float(_fc["piezas_comb"].iloc[-1]) if len(_fc) else 0.0, key=f"dem_dia_cb_{sk}")
         st.caption("Si un día tiene demanda corregida se usa esa; si no, la demanda semanal / 5.")
     with t_baj:
         st.caption("Personas de baja de cada rol en cada turno (sin fila: se aplica el absentismo estándar).")
@@ -440,7 +413,15 @@ with T["Datos"]:
     # ---- guardado automático
     try:
         n_baj, n_par = _limpia_bajas(bajas_ed), _limpia_paradas(par_ed)
-        n_sem, n_cor = _limpia_dem(dem_ed, "semana_inicio"), _limpia_dem(cor_ed, "fecha")
+        n_sem = _dsem[_dsem["semana_inicio"] != lunes_p]
+        if sem_ve > 0 or sem_cb > 0 or len(_fs):
+            n_sem = pd.concat([n_sem, pd.DataFrame([{"semana_inicio": lunes_p, "piezas_ve": float(sem_ve),
+                                                     "piezas_comb": float(sem_cb)}])], ignore_index=True)
+        n_cor = _dcor[_dcor["fecha"] != dia_p]
+        if dia_ve > 0 or dia_cb > 0:
+            n_cor = pd.concat([n_cor, pd.DataFrame([{"fecha": dia_p, "piezas_ve": float(dia_ve),
+                                                     "piezas_comb": float(dia_cb)}])], ignore_index=True)
+        n_sem, n_cor = n_sem.reset_index(drop=True), n_cor.reset_index(drop=True)
         n_stk, n_exp = _limpia_stock(stock_ed), _limpia_exp(exp_ed)
         sig_actual = _sig(n_baj, n_par, n_sem, n_cor, n_stk, n_exp)
     except Exception as e:  # noqa: BLE001
@@ -614,16 +595,15 @@ with T["Planta en tiempo real"]:
                 st_pieza = r.get("stock", np.nan)
                 ss_c = r.get("ss", ss.get(ci, np.nan))
                 cob = r.get("cobertura_h", np.nan)
-                pers = str(r.get("personas", "")) or "—"
                 if ci == config.CELULA_LOGISTICA:
-                    lineas = f"Personas: {pers}<br>Servicio logístico (no produce pieza)"
+                    lineas = f"Servicio logístico (no produce pieza)"
                 else:
                     bajo = (_num(st_pieza) and _num(ss_c) and st_pieza < ss_c)
                     stock_txt = f"{fnum(st_pieza, 0)} / SS {fnum(ss_c, 0)} / ópt. {fnum(opt_h.get(ci, np.nan), 0)}"
                     if bajo:
                         stock_txt = f"<span style='color:{G.ROJO};font-weight:700'>{stock_txt} (bajo SS)</span>"
                     cob_txt = "—" if (not _num(cob) or not np.isfinite(cob)) else fnum(cob, 1, " h")
-                    lineas = (f"Personas: {pers}<br>Stock: {stock_txt}<br>Cobertura: {cob_txt}<br>"
+                    lineas = (f"Stock: {stock_txt}<br>Cobertura: {cob_txt}<br>"
                               f"Próx. activación: {fts(r.get('proxima_activacion'))}")
                 with col:
                     st.markdown(
@@ -660,9 +640,6 @@ with T["Planta en tiempo real"]:
             else:
                 st.caption(f"Presentes: {fnum(disp, 0)} · asignados: {fnum(plan.recursos[f'{rol}_usado'].iloc[ih], 1)}")
     st.caption("El detalle por trabajador (recorrido del turno y cuadrante horario) está en la pestaña «Trabajadores».")
-    if st.session_state.historial:
-        with st.expander("Historial de recomendaciones"):
-            st.write([h["etiqueta"] for h in st.session_state.historial])
 
 # ------------------------------------------------------------------ 2. Trabajadores
 PALETA_CEL = ["#9FD8B4", "#A8C7F0", "#F4C98B", "#E3B5E8", "#F2A9A0", "#B8E0E6", "#D9D99B", "#C5B8F0",
@@ -823,14 +800,6 @@ with T["Recomendación"]:
             st.markdown(f"- Stock frente al óptimo en cierres de turno: desviación media {fnum(rs['media_pct'], 1)} %, "
                         f"máxima {fnum(rs['max_pct'], 1)} %.")
 
-    st.markdown("#### Asignación nominal de personal del turno actual")
-    ro = informes.roster_turno(rec, plan)
-    if ro is not None and len(ro):
-        st.dataframe(ro, width="stretch", hide_index=True)
-        st.caption("Cada persona se asigna a una o varias células cuya carga suma ≤ 1 (p. ej. «C8+C9»). "
-                   "La asignación se mantiene estable entre horas.")
-    else:
-        st.info("El plan no incluye reparto nominal de personal.")
     pc(G.contribuciones(plan), width="stretch")
     st.markdown("#### Alertas")
     if rec.alertas:
@@ -893,10 +862,30 @@ with T["Overview 24 h"]:
         st.dataframe(plan.resumen_turnos, width="stretch")
     pc(G.stock(rec, esc, plan, ss, OPT0), width="stretch")
     pc(G.almacen(rec, plan), width="stretch")
-    pc(G.recursos(rec, plan), width="stretch")
 
 # ------------------------------------------------------------------ 6. Alternativas
 with T["Alternativas"]:
+    st.markdown("#### Informe PDF para dirección")
+    st.caption("Incluye resumen ejecutivo, aviso para la dirección (si hay desabastecimiento), células y personal del turno, "
+               "camiones por ciclo, horas libres, stock frente al óptimo, KPIs, alternativas, contingencia (si procede), "
+               "gráficos y alertas.")
+    if st.button("Generar informe PDF", type="primary", key="gen_pdf"):
+        try:
+            with st.spinner("Generando informe…"):
+                ruta = Path(tempfile.mkdtemp()) / "informe_kwd.pdf"
+                ct = st.session_state.cont
+                informes.generar_informe_pdf(rec, esc, str(ruta),
+                                             contingencia=(ct["res"] if ct and ct.get("aplicada") else None))
+                st.session_state.pdf = ruta.read_bytes()
+        except Exception as e:  # noqa: BLE001
+            st.error(f"No se pudo generar el informe: {e}")
+            with st.expander("Detalle técnico"):
+                st.code(traceback.format_exc())
+    if st.session_state.pdf:
+        st.success("Informe generado.")
+        st.download_button("Descargar informe PDF", st.session_state.pdf,
+                           file_name=f"informe_kwd_{pd.Timestamp(rec.inicio):%Y%m%d_%H%M}.pdf", mime="application/pdf")
+    st.divider()
     st.subheader("Top 1/2/3")
     opciones = [(f"Top {i + 1}", p) for i, p in enumerate(rec.top)]
     if rec.contingencia is not None and not rec.top:
@@ -1099,11 +1088,25 @@ with T["Semana"]:
     lunes_def = pd.Timestamp(rec.inicio).normalize()
     lunes_def = lunes_def - pd.Timedelta(days=lunes_def.weekday())
     lunes = st.date_input("Lunes de la semana", value=lunes_def.date())
-    st.caption("Resuelve 24 h por turno y consolida las 8 h del turno actual. Puede tardar varios minutos.")
+    st.caption("Resuelve 24 h por turno y consolida las 8 h del turno actual. Puede tardar ~2 min.")
     if st.button("Simular semana", type="primary"):
         try:
-            with st.spinner("Simulando la semana turno a turno…"):
-                st.session_state.semana = rolling.simular_semana(esc, pd.Timestamp(lunes))
+            import inspect
+            barra = st.progress(0.0, text="Simulando la semana… puede tardar ~2 min")
+            kw = {}
+            if "progreso" in inspect.signature(rolling.simular_semana).parameters:
+                def _prog(*a, **_k):
+                    try:
+                        if len(a) >= 2 and float(a[1]) > 0:
+                            f_ = float(a[0]) / float(a[1])
+                        else:
+                            f_ = float(a[0])
+                        barra.progress(min(max(f_, 0.0), 1.0), text=f"Simulando la semana… {min(max(f_, 0.0), 1.0):.0%} (puede tardar ~2 min)")
+                    except Exception:  # noqa: BLE001
+                        pass
+                kw["progreso"] = _prog
+            st.session_state.semana = rolling.simular_semana(esc, pd.Timestamp(lunes), **kw)
+            barra.progress(1.0, text="Simulación completada")
         except Exception as e:  # noqa: BLE001
             st.error(f"Error en la simulación: {e}")
             with st.expander("Detalle técnico"):
@@ -1120,26 +1123,3 @@ with T["Semana"]:
             pc(fig, width="stretch")
         st.download_button("Descargar tabla (CSV)", sem.to_csv(index=False).encode("utf-8-sig"),
                            file_name="simulacion_semana.csv", mime="text/csv")
-
-# ------------------------------------------------------------------ 9. Informe
-with T["Informe"]:
-    st.subheader("Informe PDF para dirección")
-    st.write("Incluye resumen ejecutivo, aviso para la dirección (si hay desabastecimiento), células y personal del turno, "
-             "camiones por ciclo, horas libres, stock frente al óptimo, KPIs, alternativas, contingencia (si procede), "
-             "gráficos y alertas.")
-    if st.button("Generar informe PDF", type="primary"):
-        try:
-            with st.spinner("Generando informe…"):
-                ruta = Path(tempfile.mkdtemp()) / "informe_kwd.pdf"
-                ct = st.session_state.cont
-                informes.generar_informe_pdf(rec, esc, str(ruta),
-                                             contingencia=(ct["res"] if ct and ct.get("aplicada") else None))
-                st.session_state.pdf = ruta.read_bytes()
-        except Exception as e:  # noqa: BLE001
-            st.error(f"No se pudo generar el informe: {e}")
-            with st.expander("Detalle técnico"):
-                st.code(traceback.format_exc())
-    if st.session_state.pdf:
-        st.success("Informe generado.")
-        st.download_button("Descargar informe PDF", st.session_state.pdf,
-                           file_name=f"informe_kwd_{pd.Timestamp(rec.inicio):%Y%m%d_%H%M}.pdf", mime="application/pdf")

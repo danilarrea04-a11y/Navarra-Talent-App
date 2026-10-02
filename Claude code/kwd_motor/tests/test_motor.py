@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from kwd.config import COMPONENTES, PESO_PARAM, RECURSOS  # noqa: E402
+from kwd.config import COMPONENTES, PESO_PARAM, RECURSOS, penalizacion_tramos  # noqa: E402
 from kwd.datos import (cargar_estado, demanda_desde_coches, demanda_dia,  # noqa: E402
                        estado_ejemplo, guardar_estado, ss_por_celula, validar_ss_almacen)
 from kwd.horizonte import construir_horizonte  # noqa: E402
@@ -169,10 +169,15 @@ def test_B_desviacion_respecto_al_optimo_en_cierres(rec06, esc06):
     ss = ss_por_celula(esc06)
     for ic, c in enumerate(p.stock.columns):
         assert hz.stock_optimo[c].iloc[0] == pytest.approx(ss[c] + (500 if c in (3, 4, 8, 9, 13, 14, 15) else 1000) / 3)
-    dev = (p.stock.loc[hz.cierres] - hz.stock_optimo).abs() / hz.stock_optimo
-    assert p.componentes["B"] == pytest.approx(float(dev.to_numpy().mean()), abs=1e-6)
+    # B = media de la penalización por tramos de (stock − óptimo) / óptimo; D = demanda de un turno = óptimo − SS
+    opt = hz.stock_optimo.to_numpy(dtype=float)
+    desv = p.stock.loc[hz.cierres].to_numpy(dtype=float) - opt
+    turno = opt - np.array([ss[c] for c in p.stock.columns], dtype=float)[None, :]
+    assert p.componentes["B"] == pytest.approx(float((penalizacion_tramos(desv, turno) / opt).mean()), abs=1e-6)
+    # con los tramos, ninguna pieza supera el óptimo en más de un turno de demanda (tramo de factor 30)
+    assert (desv <= turno + 1e-6).all()
     assert len(p.stock_vs_optimo) == 3 * len(p.stock.columns)
-    assert p.kpis["stock_opt_dev_media_pct"] == pytest.approx(100 * p.componentes["B"], abs=1e-6)
+    assert p.kpis["stock_opt_dev_media_pct"] == pytest.approx(100 * float((np.abs(desv) / opt).mean()), abs=1e-6)
 
 
 # --- estado.json ----------------------------------------------------------------------------------

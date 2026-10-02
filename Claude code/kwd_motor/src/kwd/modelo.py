@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pulp
 
-from .config import CELULA_LOGISTICA, CELULAS_PAREJA, COMPONENTES, PESO_PARAM, RECURSOS, TOL
+from .config import CELULA_LOGISTICA, CELULAS_PAREJA, COMPONENTES, PESO_PARAM, RECURSOS, TOL, TRAMOS_EXCESO, TRAMOS_DEFECTO, penalizacion_tramos
 from .datos import (Escenario, celulas_productivas, ss_por_celula, stock_inicial, tabla_celulas)
 from .horizonte import Horizonte
 from .personal import aplicar_personal, personas_enteras
@@ -148,8 +148,10 @@ def evaluar(esc: Escenario, hz: Horizonte, activacion: pd.DataFrame, uso: pd.Dat
     # Componentes de la puntuación (menor = mejor)
     R, Q = _componentes_RQ(N, d, trabajo)
     S = float(np.mean(espacio / d.A)) if H else 0.0
-    if len(d.cierres) and len(d.prods):  # B = media de |I - óptimo| / óptimo en los cierres de turno
-        B = float(np.mean(np.abs(stock[d.cierres] - d.opt) / np.where(d.opt > 0, d.opt, np.inf)))
+    if len(d.cierres) and len(d.prods):  # B = media de la penalización por tramos de (I − óptimo) / óptimo
+        turno = d.opt - d.ss[None, :]
+        pen = penalizacion_tramos(stock[d.cierres] - d.opt, turno)
+        B = float(np.mean(pen / np.where(d.opt > 0, d.opt, np.inf)))
     else:
         B = 0.0
     den_e = d.W.sum() * d.kw.sum() * d.fmax
@@ -473,9 +475,22 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
     expr_S = pulp.lpSum((1.0 / d.dens[ic]) / d.A / H * I[c, h]
                         for ic, c in enumerate(prods) for h in range(H) if d.dens[ic] > 0)
     if len(d.cierres) and prods:
-        expr_B = pulp.lpSum((dpos[c, k_] + dneg[c, k_]) * (1.0 / max(float(d.opt[k_, ic]), 1.0))
-                            / (len(prods) * len(d.cierres))
-                            for k_ in range(len(d.cierres)) for ic, c in enumerate(prods))
+        # penalización por tramos: d+ y d- se reparten en segmentos de ancho creciente y coste creciente
+        terminos_b = []
+        n_b = len(prods) * len(d.cierres)
+        for k_ in range(len(d.cierres)):
+            for ic, c in enumerate(prods):
+                o = max(float(d.opt[k_, ic]), 1.0)
+                D = max(float(d.opt[k_, ic] - d.ss[ic]), 1.0)
+                for signo, var, tramos in (("p", dpos[c, k_], TRAMOS_EXCESO), ("n", dneg[c, k_], TRAMOS_DEFECTO)):
+                    segs = []
+                    for t, (ancho, factor) in enumerate(tramos):
+                        sv = _var(prob, f"tb{signo}{t}_{c}_{k_}", 0, None if ancho is None else ancho * D)
+                        segs.append(sv)
+                        if factor > 0:
+                            terminos_b.append(sv * (factor / o / n_b))
+                    prob += var == pulp.lpSum(segs), f"tr{signo}_{c}_{k_}"
+        expr_B = pulp.lpSum(terminos_b)
     else:
         expr_B = 0
     den_e = d.W.sum() * d.kw.sum() * d.fmax

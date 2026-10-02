@@ -13,7 +13,7 @@ import math
 import numpy as np
 import pandas as pd
 
-from .config import CELULA_LOGISTICA, CELULAS_PAREJA, COMPONENTES, PESO_PARAM, RECURSOS
+from .config import CELULA_LOGISTICA, CELULAS_PAREJA, COMPONENTES, PESO_PARAM, RECURSOS, penalizacion_tramos
 from .datos import celulas_productivas, ss_por_celula, stock_inicial, tabla_celulas
 
 TOL_STOCK = 1e-3   # piezas
@@ -168,12 +168,13 @@ def _validar_puntuacion(esc, hz, plan, t, celdas, prods, ss, i0, A, W, usado, A_
     R = float((DISP[W] - trabajo[W]).sum() / den) if den > 1e-9 else 0.0
 
     S = float(np.mean(esp / A)) if H else 0.0
-    # B = media sobre piezas y cierres de turno de |I - óptimo| / óptimo
+    # B = media sobre piezas y cierres de turno de la penalización por tramos de (I − óptimo) / óptimo
     B = 0.0
     if len(hz.cierres) and prods:
         opt = hz.stock_optimo[prods].to_numpy(dtype=float)
         stc = st[list(hz.cierres)]
-        B = float((np.abs(stc - opt) / np.where(opt > 0, opt, np.inf)).mean())
+        turno = opt - np.array([ss[c] for c in prods], dtype=float)[None, :]
+        B = float((penalizacion_tramos(stc - opt, turno) / np.where(opt > 0, opt, np.inf)).mean())
 
     im, icc = RECURSOS.index("mto"), RECURSOS.index("calidad")
     qs = []
