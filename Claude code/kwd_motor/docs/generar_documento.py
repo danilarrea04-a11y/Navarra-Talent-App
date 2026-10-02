@@ -365,9 +365,9 @@ def g_contrib(planes, nombres, ruta):
     ax.set_yticklabels(nombres)
     ax.invert_yaxis()
     ax.set_xlim(0, 100)
-    ax.set_xlabel("Contribución a la puntuación (máx. 100 = 50+20+15+10+5)")
+    ax.set_xlabel("Contribución al Índice KWD (máx. 100 = 50+20+15+10+5)")
     ax.legend(ncol=5, frameon=False, fontsize=7.3, loc="upper center", bbox_to_anchor=(0.5, -0.32))
-    ax.set_title("Contribución de cada criterio KWD a la puntuación", loc="left")
+    ax.set_title("Contribución de cada criterio KWD al Índice KWD", loc="left")
     fig_.tight_layout()
     fig_.savefig(ruta, dpi=170)
     plt.close(fig_)
@@ -415,7 +415,7 @@ def g_arquitectura(ruta):
     caja_(44, 22, 17, 11, "personal.py", "trabajadores M-OP01…", NAVY_HEX)
     caja_(22, 22, 17, 11, "validador.py", "certifica reglas", NAVY_HEX)
     caja_(89, 22, 10.5, 11, "rolling.py", "contingencia", "#3E64B8")
-    caja_(1, 4, 24, 11, "app/dashboard.py", "Streamlit · 10 pestañas", C_VE)
+    caja_(1, 4, 24, 11, "app/dashboard.py", "Streamlit · 9 pestañas", C_VE)
     caja_(30, 4, 22, 11, "informes.py", "PDF para dirección", C_VE)
     caja_(57, 4, 20, 11, "cli.py", "plan por consola", C_VE)
     caja_(82, 4, 17, 11, "tests/", "pytest", "#8A90A6")
@@ -438,7 +438,7 @@ def g_arquitectura(ruta):
 
 # ------------------------------------------------------------------------------------- contenido
 def filas_top(rec):
-    f = [["Plan", "Estado", "Puntuación", "Idoneidad", "Horas libres", "Células activas en el turno actual"]]
+    f = [["Plan", "Estado", "Índice KWD", "Idoneidad", "Horas libres", "Células activas en el turno actual"]]
     for p in (rec.top or [rec.contingencia]):
         f.append([p.nombre, p.estado, fm(p.puntuacion, 2), p.idoneidad_txt().replace(".", ","),
                   fm(p.kpis["horas_libres_total"], 1) + " h", ", ".join(map(str, p.config_turno_actual))])
@@ -457,7 +457,7 @@ def tabla_antes_despues(ra, rd):
     pa, pd_ = ra.mejor, rd.mejor
     ka, kd = pa.kpis, pd_.kpis
     f = [["Indicador (24 h)", "Antes de la incidencia", "Después", "Diferencia"]]
-    for nom, key, d, u in [("Puntuación", "puntuacion", 2, ""), ("Horas libres (todo el personal)", "horas_libres_total", 1, " h"),
+    for nom, key, d, u in [("Índice KWD", "puntuacion", 2, ""), ("Horas libres (todo el personal)", "horas_libres_total", 1, " h"),
                            ("Ocupación del personal", "ocupacion_total_pct", 1, " %"),
                            ("Desviación media vs stock óptimo", "stock_opt_dev_media_pct", 1, " %"),
                            ("Almacén medio", "m2_medio", 1, " m²"), ("Energía de red", "kwh_total", 0, " kWh")]:
@@ -506,6 +506,8 @@ def main():
     rec_c, rec_g = c14["rec_despues"], cgrave["rec_despues"]
     pc, pg = rec_c.mejor, rec_g.mejor
     k1 = t1.kpis
+    _act = t1.activacion
+    h_c3 = float(_act[3].sum()) if 3 in _act.columns else float(_act['3'].sum())
     from kwd.config import ETIQUETA_ROL, RECURSOS
 
     # ---- gráficos
@@ -550,13 +552,13 @@ def main():
           P("<b>Nuestra respuesta: qué activar, por qué y con qué impacto.</b> Un motor de optimización (MILP con HiGHS) "
             "que, dado el estado de la planta, devuelve las <b>3 mejores configuraciones del turno</b>, la "
             "<b>explicación</b> de cada decisión, a <b>cada trabajador</b> (M-OP01…) su puesto hora a hora, una "
-            "<b>idoneidad</b> certificada (gap del solver + validador independiente) y la <b>puntuación máxima alcanzable</b>. "
+            "<b>idoneidad</b> certificada (gap del solver + validador independiente) y la <b>Índice KWD máximo alcanzable</b>. "
             "Ante una avería o una baja, la pestaña <b>Contingencia</b> calcula el plan de reubicación, las máquinas a "
             "activar y, si hay riesgo de desabastecimiento, un <b>aviso para dirección</b>.")]
     E += [Spacer(1, 3), H2("Resultados clave de la demo (2 oct 2026, 06:00)")]
     maxpt = fm(r1["maxpt"], 2) if (r1["maxpt"] is not None and r1["maxpt"] >= r1["punt"] - 1e-9) else "no disponible"
     kp = [["Indicador", "Valor", "Lectura"],
-          ["Puntuación Top 1 (06:00)", f"{fm(r1['punt'], 2)} (máx. alcanzable {maxpt})", f"idoneidad {t1.idoneidad_txt().replace('.', ',')} = 100·(1 − gap)"],
+          ["Índice KWD Top 1 (06:00)", f"{fm(r1['punt'], 2)} (máx. alcanzable {maxpt})", f"idoneidad {t1.idoneidad_txt().replace('.', ',')} = Índice del plan / máximo alcanzable"],
           ["Horas libres del personal (24 h)", f"{fm(r1['libres'], 1)} h", f"ocupación del personal presente {fm(r1['ocup'], 1)} % (criterio R, el de más peso)"],
           ["Stock vs óptimo al cierre de turno", f"desv. media {fm(r1['dev'], 1)} %, máx. {fm(r1['devmax'], 1)} %", "óptimo = SS + demanda de un turno"],
           ["Almacén medio / pico", f"{fm(r1['m2'], 1)} / {fm(r1['pico_m2'], 0)} m²", f"capacidad {fm(area, 0)} m²"],
@@ -573,7 +575,7 @@ def main():
     E += [H2("Qué contiene la aplicación")]
     E += bullets([
         "<b>Motor</b> (paquete <font name='DVM'>kwd</font>): estado persistente en JSON, horizonte de 24 h, modelo MILP, Top 1/2/3, asignación nominal de trabajadores, explicación, validador, contingencia y rolling horizon.",
-        "<b>Dashboard Streamlit</b> con 10 pestañas: Datos, Planta en tiempo real, Trabajadores, Recomendación, KPIs, Overview 24 h, Alternativas, Contingencia, Semana e Informe.",
+        "<b>Dashboard Streamlit</b> con 9 pestañas en este orden: Datos, Recomendación (con «Generar informe PDF» arriba), Overview 24 h, Contingencia, Planta en tiempo real (sólo visualización), KPIs, Trabajadores, Alternativas y Semana.",
         "<b>Informe PDF</b> para dirección (desde el dashboard o por consola) y <b>CLI</b> (<font name='DVM'>python -m kwd.cli</font>).",
         "<b>Batería de pruebas</b> (pytest) y escenarios de demo: estado de ejemplo, contingencia de una célula y contingencia grave.",
     ])
@@ -583,14 +585,14 @@ def main():
     E += [H1("2. El problema")]
     E += [P("En cada momento hay que decidir <b>qué células de soldadura están activas cada hora</b> durante las próximas "
             "24 h, de modo que se atienda la demanda de <b>piezas</b> (VE y combustión) que sale en camiones, sin romper las "
-            "reglas obligatorias y con la mejor puntuación según los pesos de KWD. KWD no ensambla: <b>cada célula fabrica "
+            "reglas obligatorias y con la mejor Índice KWD según los pesos de KWD. KWD no ensambla: <b>cada célula fabrica "
             "una pieza exclusiva</b> y la demanda llega por tipo (VE/COMB) para cada pieza de ese tipo.")]
     E += [H2("Entradas (pestaña Datos → data/estado.json)")]
     E += bullets([
         "<b>Demanda semanal</b> (piezas VE y COMB por referencia, 5 días) y <b>demanda corregida</b> de un día. Demanda del día = corregida si está confirmada; si no, semanal / 5. "
         f"Con 1.500 coches/día y proporción 2 COMB : 1 VE son <b>{fm(ve_d, 0)} piezas VE y {fm(comb_d, 0)} COMB de cada referencia al día</b>.",
         "<b>Bajas por turno</b> de todos los roles (o por trabajador), <b>paradas programadas</b> de células (con técnicos ocupados), <b>stock actual</b> y <b>expediciones reales</b>.",
-        "<b>Constantes</b> fijas en el código (sólo lectura en la app): células, turnos estándar, almacén y parámetros. No se usa Excel; botón «Restaurar ejemplo».",
+        "<b>Constantes</b> fijas en el código (sólo lectura en la app): células, turnos estándar, almacén y parámetros. No se usa Excel.",
     ])
     E += [H2("Reglas obligatorias")]
     E += bullets([
@@ -666,7 +668,7 @@ def main():
     E += [H2("Paso 1 · Estado de entrada")]
     E += [P("<font name='DVM'>datos.cargar_estado</font> lee <font name='DVM'>data/estado.json</font> (demanda semanal y corregida, "
             "bajas, paradas, stock actual, expediciones reales) sobre las constantes del código; <font name='DVM'>datos.guardar_estado</font> "
-            "lo escribe tras cada cambio en la pestaña Datos y <font name='DVM'>datos.estado_ejemplo()</font> restaura la demo. "
+            "lo escribe tras cada cambio en la pestaña Datos; <font name='DVM'>datos.estado_ejemplo()</font> genera el estado de la demo (la app ya no tiene botón «Restaurar ejemplo»). "
             "La demanda de un día es la corregida si se ha confirmado; si no, la semanal / 5.")]
     E += [H2("Paso 2 · Construcción del horizonte horario")]
     E += [P("<font name='DVM'>horizonte.construir_horizonte</font> genera 24 slots de una hora desde el instante de inicio y calcula, "
@@ -697,35 +699,47 @@ def main():
               "(6)  I[c,h] ≥ −sn[c,h] ;   I[c,h] ≥ SS[c] − s[c,h]             (pedido servido / SS)",
               "(7)  I[c,κ] − opt[c,κ] = d⁺[c,κ] − d⁻[c,κ]                     (stock óptimo en cierres)",
               "(8)  Σ_{c∈P} I[c,h] / dens[c] ≤ 800 + sa[h]                    (almacén)"]),
-          P("<b>Función objetivo y puntuación</b> (componentes normalizados en [0,1]; menor es mejor)", "h3"), formulas([
+          P("<b>Función objetivo e Índice KWD</b> (componentes normalizados en [0,1]; menor es mejor)", "h3"), formulas([
               "R = Σ_{h∈W} (Disp − trabajo) / Σ_{h∈W} Disp ,  trabajo = Σ_c req[c,k]·u[c,h]    peso 50 %",
               "S = media_h ( m² ocupados / 800 )                                              peso 20 %",
               "Q = media_{h∈W} ½( mto N/Disp + calidad N/Disp )                               peso 15 %",
-              "B = media_{c,κ} (d⁺ + d⁻) / opt[c,κ]                                          peso 10 %",
+              "B = media_{c,κ} pen_tramos(d⁺, d⁻) / opt[c,κ]   (por tramos, ver abajo)         peso 10 %",
               "E = Σ f[h]·kW[c]·u[c,h] / Σ máx(f)·kW[c]                                       peso  5 %",
               "min  0,5R + 0,2S + 0,15Q + 0,1B + 0,05E + 1000·Σ sn/SS + 50·Σ s/SS + pen(sa) + 0,0001·Σ arranques",
-              "Puntuación = 100 · (1 − (0,5R + 0,2S + 0,15Q + 0,1B + 0,05E))"])]
+              "Índice KWD = 100 · (1 − (0,5R + 0,2S + 0,15Q + 0,1B + 0,05E))"])]
     E += [Spacer(1, 4), P("La jerarquía 1000 (pedido no servido) ≫ 50 (SS consumido) ≫ criterios hace que, ante una avería grave, "
                           "el plan consuma SS para aguantar y, resuelta la incidencia, reponga primero el SS y luego vuelva al "
                           "stock óptimo. Sólo un exceso de almacén o la ruptura de reglas de células hace «INVIABLE» un plan.")]
+    E += [P("<b>Desviación del stock óptimo por tramos.</b> El criterio B no penaliza linealmente |stock − óptimo|: mide la desviación al cierre de "
+            "cada turno en unidades D = demanda de un turno de la pieza (D = demanda diaria / 3 = óptimo − SS) y cobra más cuanto más se aleja:"),
+          tabla([["Desviación", "Tramo", "Factor"],
+                 ["Exceso (sobre el óptimo)", "0 – 0,25 D", "×0"], ["", "0,25 – 0,5 D", "×1"], ["", "0,5 – 1 D", "×5"], ["", "&gt; 1 D", "×30"],
+                 ["Defecto (bajo el óptimo)", "0 – 0,25 D", "×0"], ["", "resto", "×2"]], [6 * cm, 5 * cm, 3 * cm], ["L", "L", "L"], fs=7.8),
+          Spacer(1, 3),
+          P("Por debajo del SS se aplica además la penalización existente de 50; el pedido no servido sigue en 1000. "
+            f"<b>Por qué:</b> antes de los tramos, la célula 3 funcionaba las 24 h sólo para ocupar operarios y su stock llegaba a "
+            f"<b>+207 %</b> sobre el óptimo. Con los tramos, la desviación máxima en la demo es de <b>{fm(r1['devmax'], 0)} %</b> "
+            f"y la célula 3 trabaja unas <b>{fm(h_c3, 0)} h</b>. La penalización es convexa (cada tramo cuesta más que el anterior), "
+            "de modo que el solver llena primero los tramos baratos y no hacen falta variables binarias.")]
     E += [H2("Paso 4 · Top 1, Top 2 y Top 3 por cortes")]
     E += [P("Una variable binaria y<sub>c</sub> indica si la célula c se activa en algún momento del turno actual. Tras obtener la "
             "configuración S<sub>j</sub> se añade un <b>corte</b> que la prohíbe, y se vuelve a resolver:")]
     E += [formulas(["y[c] ≥ a[c,h] ∀h del turno actual ;  y[c] ≤ Σ_{h∈turno} a[c,h]",
                     "Σ_{c∈Sj} (1 − y[c]) + Σ_{c∉Sj} y[c] ≥ 1       (corte: configuración distinta a Sj)"]),
           P("Así se obtienen K = 3 configuraciones <b>realmente distintas</b> del turno actual. El Top 1 es el plan con menos piezas "
-            "sin servir y, a igualdad, mejor puntuación; las alternativas con idoneidad inferior al 50 % (el solver no llegó a "
-            "mejorarlas en el tiempo límite) no se presentan."), Spacer(1, 2)]
+            "sin servir y, a igualdad, mejor Índice KWD; las alternativas cuyo gap del solver supera el 50 % (cota demasiado lejana tras el tiempo límite) "
+            "no se presentan."), Spacer(1, 2)]
     E += [H2("Paso 5 · Asignación nominal de trabajadores")]
     E += [P("<font name='DVM'>personal.asignacion_personal</font> reparte, hora a hora, a los trabajadores enumerados (M-OP01…, T-OP01…, N-…) "
             "entre las células activas según la carga de cada rol, manteniendo en lo posible a cada persona en su puesto. "
             "Cada persona presente queda <b>ASIGNADA</b> (con sus células), <b>LIBRE</b> (tiempo muerto) o <b>PARADA</b> "
             "(técnico de mantenimiento en una parada programada). De ahí salen las horas libres por rol y el roster por trabajador.")]
-    E += [H2("Paso 6 · Idoneidad, puntuación máxima alcanzable y validador")]
+    E += [H2("Paso 6 · Idoneidad, Índice KWD máximo alcanzable y validador")]
     E += bullets([
-        f"<b>Idoneidad (%) = 100 · (1 − gap relativo)</b>. Con el gap aceptado ({fm(100 * gap_par, 1)} %) el plan es óptimo garantizado ±{fm(100 * gap_par, 1)} %; si el solver para por tiempo (8 s) el estado es FACTIBLE y se informa del gap real.",
-        "<b>Puntuación máxima alcanzable</b> = puntuación + 100 · objetivo · gap (cota del solver): hasta dónde podría mejorar el plan como máximo.",
-        "<b>Validador independiente</b> (<font name='DVM'>validador.py</font>): recalcula con bucles explícitos reglas, personal y puntuación a partir de la activación del plan, sin reutilizar el modelo. Lista vacía = certificado.",
+        f"<b>Idoneidad (%) = Índice KWD del plan / índice máximo alcanzable demostrado por el solver × 100.</b> El máximo alcanzable es el Índice KWD del plan más el margen que permite la cota del solver (100 · objetivo · gap). En la demo el Top 1 de las 06:00 tiene idoneidad {t1.idoneidad_txt().replace('.', ',')}: consigue casi todo lo que estos recursos y esta demanda permiten.",
+        "<b>Índice KWD</b> (antes «puntuación»): escala 0–100 que sirve para <b>comparar planes entre sí</b>. El 100 no es alcanzable con estos recursos y esta demanda (siempre hay personal sin trabajo productivo, almacén ocupado y energía consumida), por lo que la idoneidad se mide contra el máximo demostrable y no contra 100.",
+        f"Si el solver para por tiempo (8 s) el estado es FACTIBLE y se informa del gap real; las alternativas Top 2/3 con gap &gt; 50 % se descartan. Gap relativo aceptado: {fm(100 * gap_par, 1)} %.",
+        "<b>Validador independiente</b> (<font name='DVM'>validador.py</font>): recalcula con bucles explícitos reglas, personal e Índice KWD a partir de la activación del plan, sin reutilizar el modelo. Lista vacía = certificado.",
         f"En esta demo el validador encuentra {len(cert['06:00'])} incumplimientos en el Top 1 de las 06:00 y {len(cert['14:00'])} en el de las 14:00.",
     ])
     E += [H2("Paso 7 · Explicación automática")]
@@ -749,13 +763,14 @@ def main():
     E += [H2("5.1 Top 3 a las 06:00 (turno de mañana)")]
     E += [tabla(filas_top(rec06), [2.4 * cm, 2.2 * cm, 2.3 * cm, 2.0 * cm, 2.3 * cm, 5.8 * cm], ["L", "L", "C", "C", "C", "L"], destacar_filas=(1,))]
     E += [P(f"Tiempo de cálculo del Top 3: {fm(rec06.tiempo_total_s, 0)} s (8 s por plan). Las configuraciones mostradas son válidas y "
-            f"se comparan en puntuación y horas libres."
-            + (f" Sólo se muestra {len(rec06.top)} configuración(es): las alternativas con idoneidad inferior al 50 % tras el límite de 8 s se descartan." if len(rec06.top) < 3 else ""), "small")]
+            f"se comparan en Índice KWD y horas libres."
+            + (f" Sólo se muestra {len(rec06.top)} configuración(es): las alternativas cuyo gap del solver supera el 50 % tras el límite de 8 s se descartan." if len(rec06.top) < 3 else ""), "small")]
     E += [H2("5.2 Top 3 a las 14:00 (turno de tarde)")]
     E += [tabla(filas_top(rec14), [2.4 * cm, 2.2 * cm, 2.3 * cm, 2.0 * cm, 2.3 * cm, 5.8 * cm], ["L", "L", "C", "C", "C", "L"], destacar_filas=(1,))]
-    E += [P(f"A las 14:00 hay una parada programada de la célula 13 (2 técnicos) y un operario de baja. Top 1: puntuación "
+    E += [P(f"A las 14:00 hay una parada programada de la célula 13 (2 técnicos) y un operario de baja. Top 1: Índice KWD "
             f"{fm(r14['punt'], 2)}, {fm(r14['libres'], 1)} h libres en 24 h, idoneidad {t14.idoneidad_txt().replace('.', ',')}.", "small")]
     E += [H2("5.3 Horas libres: el criterio principal")]
+    E += [P(f"El tiempo muerto se mide sobre el <b>trabajo productivo</b> (carga de la célula × fracción de la hora en que produce). En la demo del Top 1 de las 06:00 son <b>{fm(r1['libres'], 0)} h</b> de tiempo muerto en 24 h, frente a unas 114 h antes de los tramos de stock óptimo: aquella cifra menor se lograba sobreproduciendo para ocupar personal, y los tramos lo impiden.", "small")]
     hl = [["Rol", "Horas libres (24 h)", "Ocupación"]]
     for r in RECURSOS:
         hl.append([ETIQUETA_ROL[r], fm(k1[f"horas_libres_{r}"], 1) + " h", fm(k1[f"ocupacion_{r}_pct"], 1) + " %"])
@@ -763,7 +778,7 @@ def main():
     E += [tabla(hl, [6 * cm, 5 * cm, 4 * cm], ["L", "C", "C"], destacar_filas=(len(hl) - 1,)), Spacer(1, 4),
           fig(tmp / "libres06.png", 16), P("Figura 1. Tiempo muerto (horas-persona sin trabajo productivo) por rol en las 24 h del Top 1 de las 06:00.", "cap")]
     E += [fig(tmp / "contrib06.png", 16.5)]
-    E += [P(f"Figura 2. Contribución de cada criterio a la puntuación (100 = perfección en los cinco). Puntuación máxima alcanzable del Top 1: {maxpt}.", "cap")]
+    E += [P(f"Figura 2. Contribución de cada criterio al Índice KWD (100 = perfección en los cinco). Índice KWD máximo alcanzable del Top 1: {maxpt}.", "cap")]
     E += [H2("5.4 Qué activar, por qué y con qué impacto (Top 1, 06:00)")]
     que = rec06.explicacion["que"]
     qt = [["Célula", "Tipo", "Horas", "Franja", "Piezas", "Horas en franja solar"]]
@@ -876,23 +891,22 @@ def main():
                   "<b>Por terminal (PowerShell):</b> <font name='DVM'>$env:PYTHONPATH=\"src\"; .venv\\Scripts\\python.exe -m streamlit run app\\dashboard.py</font>"])
     E += [H2("6.3 Recorrido por las pestañas del dashboard")]
     tabs_ = [["Pestaña", "Para qué sirve"],
-             ["Datos", "Entrada de demanda semanal (con ayuda coches/día 2:1) y demanda corregida del día, bajas por turno, paradas programadas, stock actual y expediciones reales; se guarda solo en data/estado.json. Constantes en un expander de sólo lectura y botón «Restaurar ejemplo»"],
-             ["Planta en tiempo real", "Sólo visualización: selector de hora, rejilla de 16 células con su estado, trabajadores asignados y stock frente a SS y óptimo"],
-             ["Trabajadores", "Roster por trabajador (M-OP01…): puesto hora a hora, horas asignadas y libres"],
-             ["Recomendación", "Top 1 (puntuación, máxima alcanzable, idoneidad, estado), «Qué activar / Por qué / Impacto» y alertas; aviso a dirección si el plan es CRÍTICO"],
-             ["KPIs", "Horas libres por rol y total (KPI principal), ocupación, stock vs óptimo al cierre de turno, almacén y energía"],
+             ["Datos", "Demanda: sólo 4 entradas enteras (piezas VE y COMB por semana y piezas VE y COMB corregidas del día); además bajas por turno, paradas programadas, stock actual y expediciones reales; se guarda en data/estado.json. Constantes en un expander de sólo lectura. No hay botón «Restaurar ejemplo»"],
+             ["Recomendación", "Botón «Generar informe PDF» arriba. Top 1 (Índice KWD, máximo alcanzable, idoneidad, estado), «Qué activar / Por qué / Impacto» y alertas; aviso a dirección si el plan es CRÍTICO"],
              ["Overview 24 h", "Gantt de células (VE/COMB), resumen por turno, stock vs SS/óptimo y ocupación de almacén"],
-             ["Alternativas", "Top 1/2/3 lado a lado, con diferencias de KPIs"],
              ["Contingencia", "Única pestaña de incidencias: células averiadas (desde/hasta) y personas o nº por rol; «Calcular plan de contingencia» sólo calcula al pulsar. Muestra resumen en lenguaje de planta, reubicación, máquinas, consumo de SS, aviso a dirección y KPIs antes/después; «Aplicar como incidencia real»"],
-             ["Semana", "Simulación de 15 turnos con rolling horizon; descarga CSV"],
-             ["Informe", "Genera y descarga el informe PDF de dirección"]]
+             ["Planta en tiempo real", "Sólo visualización: selector de hora, rejilla de 16 células con su estado, trabajadores asignados y stock frente a SS y óptimo"],
+             ["KPIs", "Horas libres por rol y total (KPI principal), ocupación, stock vs óptimo al cierre de turno, almacén y energía"],
+             ["Trabajadores", "Roster por trabajador (M-OP01…): puesto hora a hora, horas asignadas y libres"],
+             ["Alternativas", "Top 1/2/3 lado a lado, con diferencias de KPIs"],
+             ["Semana", "Simulación de 15 turnos con rolling horizon y los mismos 8 s por plan que la app (≈2,5 min en total): producción por turno y evolución del stock por pieza; descarga CSV"]]
     E += [tabla(tabs_, [3.8 * cm, 13.2 * cm], ["L", "L"], fs=7.6)]
     E += [Spacer(1, 4), P("En la barra lateral se elige la fecha/hora de inicio y se pulsa <b>Calcular plan</b>.", "small")]
     E += [H2("6.4 Informe PDF y datos")]
     E += bullets([
-        "<b>Informe PDF:</b> pestaña «Informe» → «Generar», o por consola <font name='DVM'>python -m kwd.cli --estado data/estado.json --inicio \"2026-10-02 14:00\" --pdf salida/informe.pdf</font>.",
+        "<b>Informe PDF:</b> pestaña «Recomendación» → «Generar informe PDF», o por consola <font name='DVM'>python -m kwd.cli --estado data/estado.json --inicio \"2026-10-02 14:00\" --pdf salida/informe.pdf</font>.",
         "<b>Editar datos:</b> en la pestaña Datos; cada cambio se guarda en <font name='DVM'>data/estado.json</font> (demanda semanal y diaria, bajas, paradas, stock actual, expediciones reales). No hay Excel.",
-        "<b>Este documento</b> se regenera con <font name='DVM'>$env:PYTHONPATH=\"src\"; .venv\\Scripts\\python.exe docs\\generar_documento.py</font> (ejecuta el motor real, ~2 min).",
+        "<b>Este documento</b> se regenera con <font name='DVM'>$env:PYTHONPATH=\"src\"; .venv\\Scripts\\python.exe docs\\generar_documento.py</font> (ejecuta el motor real, varios minutos).",
     ])
     E += [PageBreak()]
 
@@ -900,10 +914,10 @@ def main():
     E += [H1("7. Limitaciones y puntos abiertos")]
     E += [P("Presentamos las limitaciones con honestidad: forman parte de la solidez de la propuesta.")]
     lim = [["Punto", "Qué ocurre", "Cómo lo tratamos"],
-           ["Límite de 8 s por plan", f"El solver puede parar por tiempo (FACTIBLE); idoneidad del Top 1 de las 06:00: {t1.idoneidad_txt().replace('.', ',')}; las alternativas con idoneidad &lt; 50 % se ocultan.",
-            "La idoneidad y la puntuación máxima alcanzable declaran el margen real de mejora; subir tiempo_limite_s lo reduce."],
+           ["Límite de 8 s por plan", f"El solver puede parar por tiempo (FACTIBLE); idoneidad del Top 1 de las 06:00: {t1.idoneidad_txt().replace('.', ',')}; las alternativas con gap &gt; 50 % se descartan.",
+            "La idoneidad y la Índice KWD máximo alcanzable declaran el margen real de mejora; subir tiempo_limite_s lo reduce."],
            ["Gap relativo 0,1 %", "Demostrar el óptimo exacto supera el tiempo disponible (8 s por plan); se acepta un gap relativo pequeño.",
-            "Diferencias de puntuación menores que el gap no son significativas."],
+            "Diferencias de Índice KWD menores que el gap no son significativas."],
            ["Viernes noche sin cobertura del lunes", "El horizonte termina el sábado a las 06:00 y el fin de semana no hay demanda; el primer camión del lunes 06:00 no queda protegido por el stock óptimo.",
             "Pendiente: ampliar el horizonte o fijar un óptimo de viernes."],
            ["Supuestos por confirmar con KWD", "Pieza exclusiva por célula, SS de 400/200, 16 ciclos de 1,5 h, franja solar 11–14 h, factor nocturno ×1,20 y OEE 100 %.",
@@ -945,7 +959,7 @@ def main():
     E += [H2("Mensajes clave del pitch")]
     E += bullets([
         "<b>1. Qué activar, por qué y con qué impacto:</b> una decisión clara y explicable, y a cada trabajador su puesto hora a hora.",
-        f"<b>2. Idoneidad demostrada:</b> el solver certifica el Top 1 con idoneidad {t1.idoneidad_txt().replace('.', ',')} (puntuación máxima alcanzable {maxpt}) y un validador independiente comprueba todas las reglas.",
+        f"<b>2. Idoneidad demostrada:</b> el solver certifica el Top 1 con idoneidad {t1.idoneidad_txt().replace('.', ',')} (Índice KWD máximo alcanzable {maxpt}) y un validador independiente comprueba todas las reglas.",
         f"<b>3. Personal sin tiempo muerto:</b> el criterio de más peso mide las horas libres reales; en la demo quedan {fm(r1['libres'], 0)} horas-persona libres en 24 h.",
         "<b>4. Stock óptimo y reposición:</b> el stock tiende a SS + un turno de demanda; ante una avería grave se consume SS para aguantar y se repone después, con aviso a dirección si hay pedidos sin servir.",
         "<b>5. Contingencia a petición:</b> en segundos, el plan de reubicación de personas y máquinas para una avería o una baja.",
@@ -974,9 +988,9 @@ def main():
           ["HiGHS", "Solver de código abierto que resuelve el MILP (invocado vía PuLP)."],
           ["Rolling horizon", "Planificar 24 h, ejecutar sólo el primer turno y recalcular al avanzar el tiempo o ante una incidencia."],
           ["Gap relativo", "Distancia entre la mejor solución y la mejor cota demostrada, en proporción."],
-          ["Idoneidad", "100 · (1 − gap). Mide cuán cerca está el plan del óptimo; se complementa con el validador independiente."],
-          ["Puntuación máxima alcanzable", "Puntuación del plan más el margen de mejora que permite la cota del solver."],
-          ["Validador", "Módulo que recalcula las reglas obligatorias y la puntuación sin usar el modelo; lista vacía = plan factible."],
+          ["Idoneidad", "Índice KWD del plan / índice máximo alcanzable demostrado por el solver × 100. Mide qué parte de lo posible consigue el plan; el 100 absoluto no es alcanzable."],
+          ["Índice KWD máximo alcanzable", "Índice KWD del plan más el margen de mejora que permite la cota del solver."],
+          ["Validador", "Módulo que recalcula las reglas obligatorias y el Índice KWD sin usar el modelo; lista vacía = plan factible."],
           ["Horas libres / tiempo muerto", "Horas-persona del personal presente sin trabajo productivo: presentes − carga × fracción de la hora produciendo."],
           ["SS (stock de seguridad)", "Piezas mínimas de cada tipo (400 VE / 200 COMB). Un camión puede consumirlas; se reponen con máxima prioridad."],
           ["Stock óptimo", "SS + demanda de un turno de la pieza (SS + demanda diaria / 3), objetivo al cierre de cada turno."],
