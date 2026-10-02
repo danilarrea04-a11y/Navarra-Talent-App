@@ -114,7 +114,7 @@ def _grafico_gantt(rec, esc, plan, ruta):
     ax.xaxis_date()
     ax.set_xlim(mdates.date2num(horas[0]), mdates.date2num(horas[-1] + pd.Timedelta(hours=1)))
     _fmt_x(ax)
-    ax.set_xlabel("Hora del día (zona amarilla = franja con factor energético reducido; línea discontinua = cambio de turno)", fontsize=7)
+    ax.set_xlabel("Hora del día (zona amarilla = franja solar 11–14, factor energético reducido; línea discontinua = cambio de turno)", fontsize=7)
     ax.set_title("Activación de células en las próximas 24 h", fontsize=10, color=NAVY, loc="left")
     from matplotlib.patches import Patch
     ax.legend(handles=[Patch(color=VERDE, label="VE"), Patch(color=AZUL, label="Combustión"), Patch(color=GRIS_LOG, label="Logística")],
@@ -223,15 +223,134 @@ def _kpi(plan, *claves, default=None):
     return default
 
 
+def kpis_desperdicio(plan) -> list:
+    """[(rol, horas-persona desperdiciadas)] a partir de los KPI `desperdicio_<rol>_h` (v2)."""
+    k = plan.kpis or {}
+    out = []
+    for r in ("operarios", "picking", "carretilleros", "mto", "calidad"):
+        for clave in (f"desperdicio_{r}_h", f"desperdicio_{r}"):
+            if k.get(clave) is not None:
+                out.append((NOMBRE_REC[r], float(k[clave])))
+                break
+    return out
+
+
+def resumen_camiones(rec):
+    """Resumen de camiones del horizonte a partir de `Horizonte.camiones` (None si no hay datos)."""
+    cam = getattr(rec.horizonte, "camiones", None)
+    if not isinstance(cam, pd.DataFrame) or not len(cam) or "n_camiones" not in cam.columns:
+        return None
+    c = cam.copy()
+    n = pd.to_numeric(c["n_camiones"], errors="coerce").fillna(0)
+    total = float(n.sum())
+    horizonte_h = float(len(rec.horizonte.slots))
+    return {"total": total, "media": float(n.mean()), "max": float(n.max()), "ciclos": int(len(c)),
+            "por_dia": total * 24.0 / horizonte_h if horizonte_h else total, "tabla": c}
+
+
+def _slot_idx(rec, serie):
+    """Convierte la columna `slot` (índice 0..H-1 o marca temporal) en índices enteros."""
+    hs = [pd.Timestamp(x) for x in rec.horizonte.slots.reset_index(drop=True)["inicio"]]
+    if pd.api.types.is_datetime64_any_dtype(serie):
+        mp = {h: i for i, h in enumerate(hs)}
+        return pd.to_datetime(serie).map(lambda t: mp.get(pd.Timestamp(t).floor("h"), -1)).astype(int)
+    return pd.to_numeric(serie).astype(int)
+
+
+def personal_en_slot(rec, plan, i) -> pd.DataFrame:
+    """Filas de `Plan.personal` del slot `i` con columnas normalizadas
+    (trabajador, rol, turno, celulas, carga, estado)."""
+    cols = ["trabajador", "rol", "turno", "celulas", "carga", "estado"]
+    pers = getattr(plan, "personal", None)
+    if not isinstance(pers, pd.DataFrame) or not len(pers):
+        return pd.DataFrame(columns=cols)
+    d = pers.copy()
+    if "trabajador" not in d.columns and "persona" in d.columns:
+        d["trabajador"] = d["persona"]
+    for c, v in (("estado", "ASIGNADO"), ("turno", ""), ("carga", np.nan), ("celulas", "")):
+        if c not in d.columns:
+            d[c] = v
+    d = d[_slot_idx(rec, d["slot"]) == int(i)].copy()
+    d["celulas"] = d["celulas"].fillna("").astype(str)
+    d["estado"] = d["estado"].astype(str).str.upper()
+    return d[cols].reset_index(drop=True)
+
+
+def roster_turno(rec, plan):
+    """Tabla persona × hora del turno actual con las células de cada persona (None si no hay datos)."""
+    pers = getattr(plan, "personal", None)
+    if not isinstance(pers, pd.DataFrame) or not len(pers):
+        return None
+    idx_turno = list(rec.horizonte.slots_turno_actual())
+    hs = [pd.Timestamp(x) for x in rec.horizonte.slots.reset_index(drop=True)["inicio"]]
+    d = pers.copy()
+    if "trabajador" not in d.columns and "persona" in d.columns:
+        d["trabajador"] = d["persona"]
+    d["_i"] = _slot_idx(rec, d["slot"])
+    d = d[d["_i"].isin(idx_turno)]
+    if not len(d):
+        return None
+    d["_h"] = d["_i"].map(lambda i: hs[i].strftime("%H:%M"))
+    cel = d["celulas"].fillna("").astype(str)
+    if "estado" in d.columns:
+        est = d["estado"].astype(str).str.upper()
+        cel = cel.where(~(est == "EXCEDENTE"), "excedente")
+        cel = cel.where(~((est == "LIBRE") & (cel == "")), "libre")
+    d["celulas"] = cel.replace("", "libre")
+    piv = d.pivot_table(index=["rol", "trabajador"], columns="_h", values="celulas", aggfunc="first", sort=False)
+    piv = piv[[hs[i].strftime("%H:%M") for i in idx_turno if hs[i].strftime("%H:%M") in piv.columns]]
+    piv = piv.fillna("—").reset_index()
+    piv["rol"] = piv["rol"].map(lambda r: NOMBRE_REC.get(str(r), str(r)))
+    return piv.rename(columns={"rol": "Rol", "trabajador": "Trabajador"})
+
+
+def roster_compacto(rec, plan):
+    """Filas [persona, 'HH:MM–HH:MM C8+C9; ...'] resumiendo tramos contiguos del turno actual."""
+    t = roster_turno(rec, plan)
+    if t is None:
+        return None
+    horas = [c for c in t.columns if c not in ("Rol", "Trabajador")]
+    filas = []
+    for _, r in t.iterrows():
+        tramos, ini = [], 0
+        for j in range(1, len(horas) + 1):
+            if j == len(horas) or r[horas[j]] != r[horas[ini]]:
+                fin = (pd.Timestamp(f"2000-01-01 {horas[j - 1]}") + pd.Timedelta(hours=1)).strftime("%H:%M")
+                tramos.append(f"{horas[ini]}–{fin}: {r[horas[ini]]}")
+                ini = j
+        filas.append([str(r["Trabajador"]), "; ".join(tramos)])
+    return filas
+
+
 def kpi_lista(plan) -> list:
     """Lista curada de KPIs (etiqueta, valor formateado, grupo)."""
     k = plan.kpis or {}
     g = lambda n, d=1, suf="": (_f(k[n], d) + suf) if k.get(n) is not None else "—"  # noqa: E731
+    def g2(*nombres, d=1, suf=""):  # primer KPI disponible entre varios nombres (compatibilidad v1/v2)
+        for n in nombres:
+            if k.get(n) is not None:
+                return _f(k[n], d) + suf
+        return "—"
+
     out = [
-        ("Demanda cubierta", g("demanda_cubierta_pct", 1, " %"), "Demanda"),
-        ("Chasis VE a expedir / cubiertos", f"{g('chasis_ve_a_expedir', 0)} / {g('chasis_ve_cubiertos', 0)}", "Demanda"),
-        ("Chasis COMB a expedir / cubiertos", f"{g('chasis_comb_a_expedir', 0)} / {g('chasis_comb_cubiertos', 0)}", "Demanda"),
+        ("Demanda cubierta", g2("demanda_cubierta_pct", d=1, suf=" %"), "Demanda"),
+        ("Piezas VE a expedir / cubiertas",
+         f"{g2('piezas_ve_a_expedir', 'chasis_ve_a_expedir', d=0)} / "
+         f"{g2('piezas_ve_cubiertas', 'piezas_ve_cubiertos', 'chasis_ve_cubiertos', d=0)}", "Demanda"),
+        ("Piezas COMB a expedir / cubiertas",
+         f"{g2('piezas_comb_a_expedir', 'chasis_comb_a_expedir', d=0)} / "
+         f"{g2('piezas_comb_cubiertas', 'piezas_comb_cubiertos', 'chasis_comb_cubiertos', d=0)}", "Demanda"),
     ]
+    # KPIs de camiones y de desperdicio de personal (nombres tolerantes a la versión del motor)
+    for clave, v in k.items():
+        kn = str(clave).lower()
+        if isinstance(v, (int, float, np.floating, np.integer)) and not isinstance(v, bool):
+            if "camion" in kn:
+                out.append((str(clave).replace("_", " ").capitalize(), _f(v, 1), "Expediciones"))
+            elif any(s in kn for s in ("plantilla", "libre", "excedente")):
+                out.append((str(clave).replace("_", " ").capitalize(), _f(v, 1), "Personal"))
+    for nom, v in kpis_desperdicio(plan):
+        out.append((f"Desperdicio de personal ({nom})", _f(v, 1) + " h", "Recursos"))
     for r, n in (("operarios", "Operarios"), ("picking", "Picking"), ("carretilleros", "Carretilleros"),
                  ("mto", "Mantenimiento"), ("calidad", "Calidad")):
         out.append((f"{n}: horas usadas", g(f"{r}_horas", 1, " h"), "Recursos"))
@@ -354,7 +473,28 @@ def _ventanas(serie_bool, horas):
     return ", ".join(f"{_hhmm(horas[a])}–{_hhmm(horas[b - 1] + pd.Timedelta(hours=1))}" for a, b in tramos) or "—"
 
 
-def generar_informe_pdf(rec, esc, ruta) -> str:
+def _def_plan_manual() -> str:
+    from . import config
+    return getattr(config, "DEFINICION_PLAN_MANUAL",
+                   "Plan de referencia manual: simulación de cómo planificaría un encargado sin optimizador.")
+
+
+def _paradas_activas(rec, esc) -> pd.DataFrame:
+    """Paradas (programadas y averías) que solapan con el horizonte del plan."""
+    for nombre in ("paradas",):
+        df = getattr(esc, nombre, None)
+        if isinstance(df, pd.DataFrame) and len(df):
+            t0 = pd.Timestamp(rec.inicio)
+            t1 = t0 + pd.Timedelta(hours=len(rec.horizonte.slots))
+            d = df.copy()
+            d["desde"] = pd.to_datetime(d["desde"])
+            d["hasta"] = pd.to_datetime(d["hasta"])
+            return d[(d["desde"] < t1) & (d["hasta"] > t0)].reset_index(drop=True)
+    return pd.DataFrame()
+
+
+def generar_informe_pdf(rec, esc, ruta, contingencia=None) -> str:
+    """Genera el informe PDF. `contingencia` = dict de `rolling.contingencia_celula` si el plan viene de una avería."""
     ruta = str(ruta)
     os.makedirs(os.path.dirname(os.path.abspath(ruta)), exist_ok=True)
     ss = _estilos()
@@ -429,10 +569,12 @@ def generar_informe_pdf(rec, esc, ruta) -> str:
     story.append(Paragraph("<b>Con qué impacto</b>", ss["H2k"]))
     fi = filas_impacto(rec)
     if fi:
-        story.append(_tabla([["Indicador", "Plan recomendado", "Plan de referencia manual", "Diferencia"]] +
+        story.append(_tabla([["Indicador", "Plan recomendado", "Plan manual de referencia", "Diferencia"]] +
                             [list(x) for x in fi], [ancho * 0.34, ancho * 0.22, ancho * 0.26, ancho * 0.18], ss))
     else:
-        story.append(Paragraph("Sin comparación con el plan de referencia disponible.", ss["Cuerpo"]))
+        story.append(Paragraph("Sin comparación con el plan manual de referencia disponible.", ss["Cuerpo"]))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph("<b>¿Qué es el plan manual de referencia?</b> " + _def_plan_manual(), ss["Peq"]))
     # ---- turno actual
     story.append(Paragraph(f"Células activas en el turno actual ({_turno_nombre(turno_act)})", ss["H1k"]))
     mask_t = (slots["turno"] == turno_act).values
@@ -455,6 +597,82 @@ def generar_informe_pdf(rec, esc, ruta) -> str:
     if len(filas) == 1:
         filas.append(["—", "—", "—", "Ninguna célula activa", "—", "—"])
     story.append(_tabla(filas, [1.6 * cm, 1.6 * cm, 2.4 * cm, ancho - 12.2 * cm, 2.4 * cm, 2.2 * cm], ss))
+
+    # ---- personal nominal del turno
+    story.append(Paragraph(f"Asignación nominal de personal ({_turno_nombre(turno_act)})", ss["H2k"]))
+    try:
+        ro = roster_compacto(rec, plan)
+    except Exception:  # noqa: BLE001
+        ro = None
+    if ro:
+        story.append(_tabla([["Trabajador", "Células por tramo horario"]] + ro, [2.6 * cm, ancho - 2.6 * cm], ss))
+        story.append(Paragraph("Cada trabajador está numerado (turno-rol-nº, p. ej. M-OP07) y puede cubrir varias células "
+                               "en la misma hora si su carga suma ≤ 1 (p. ej. C8+C9). La asignación se mantiene estable "
+                               "entre horas mientras la célula siga activa; «libre» = en plantilla sin célula; "
+                               "«excedente» = disponible para reubicar.", ss["Peq"]))
+        desp = kpis_desperdicio(plan)
+        if desp:
+            story.append(Paragraph("Desperdicio de personal en el horizonte (horas-persona asignadas pero no necesarias): " +
+                                   "; ".join(f"{n}: {_f(v, 1)} h" for n, v in desp) + ".", ss["Cuerpo"]))
+    else:
+        story.append(Paragraph("El plan no incluye reparto nominal de personal.", ss["Cuerpo"]))
+
+    # ---- expediciones
+    cam = resumen_camiones(rec)
+    story.append(Paragraph("Expediciones y camiones", ss["H2k"]))
+    if cam:
+        story.append(Paragraph(
+            f"Ciclos de expedición cada 1,5 h (16 por día laborable). En cada ciclo salen los camiones necesarios "
+            f"(m² de la carga / 15 m² por camión, sin obligación de ir llenos). En el horizonte: "
+            f"<b>{_f(cam['total'], 0)} camiones</b> en {cam['ciclos']} ciclos "
+            f"(media {_f(cam['media'], 1)}, máximo {_f(cam['max'], 0)} por ciclo; ≈ {_f(cam['por_dia'], 0)} camiones/día).",
+            ss["Cuerpo"]))
+        t_ = cam["tabla"].head(24)
+        filas_c = [["Ciclo", "Salida", "Piezas VE", "Piezas COMB", "m²", "Camiones"]]
+        for _, r_ in t_.iterrows():
+            filas_c.append([str(r_.get("slot", "")), pd.Timestamp(r_["fecha_hora"]).strftime("%d/%m %H:%M")
+                            if "fecha_hora" in t_.columns else "—",
+                            _f(r_.get("piezas_ve", 0), 0), _f(r_.get("piezas_comb", 0), 0),
+                            _f(r_.get("m2", 0), 1), _f(r_.get("n_camiones", 0), 0)])
+        story.append(_tabla(filas_c, [1.6 * cm, 3 * cm, 3 * cm, 3 * cm, 2.6 * cm, ancho - 13.2 * cm], ss))
+    else:
+        story.append(Paragraph("Sin información de camiones en el horizonte.", ss["Cuerpo"]))
+
+    # ---- contingencia (avería)
+    par_act = _paradas_activas(rec, esc)
+    aver = par_act[par_act["tipo"].astype(str).str.upper().str.startswith("AVER")] if len(par_act) else par_act
+    if contingencia is not None or len(aver):
+        story.append(Paragraph("Contingencia por avería de célula", ss["H1k"]))
+        if len(aver):
+            story.append(Paragraph("Averías vigentes en el horizonte: " + "; ".join(
+                f"célula {int(r_['celula'])} desde {pd.Timestamp(r_['desde']):%d/%m %H:%M} hasta "
+                f"{pd.Timestamp(r_['hasta']):%d/%m %H:%M}" for _, r_ in aver.iterrows()) + ".", ss["Cuerpo"]))
+        if contingencia is not None:
+            for t_ in contingencia.get("resumen") or []:
+                story.append(Paragraph("• " + str(t_), ss["Cuerpo"]))
+            ag = contingencia.get("agotamiento")
+            if ag:
+                story.append(Paragraph(
+                    f"Agotamiento de la pieza averiada: bajo stock de seguridad a las "
+                    f"{pd.Timestamp(ag['hora_bajo_ss']):%d/%m %H:%M}" if ag.get("hora_bajo_ss") is not None else
+                    "La pieza averiada no baja del stock de seguridad en el horizonte", ss["Cuerpo"]))
+            ru = contingencia.get("reubicacion")
+            if isinstance(ru, pd.DataFrame) and len(ru):
+                d_ = ru.copy()
+                for c_ in ("desde", "hasta"):
+                    if c_ in d_:
+                        d_[c_] = d_[c_].map(lambda x: pd.Timestamp(x).strftime("%d/%m %H:%M") if pd.notna(x) else "—")
+                d_.columns = [{"persona": "Trabajador", "trabajador": "Trabajador", "rol": "Rol", "de_celula": "De célula", "a_celulas": "A células",
+                               "desde": "Desde", "hasta": "Hasta"}.get(c, c) for c in d_.columns]
+                story.append(Paragraph("Reubicación de personas", ss["H2k"]))
+                story.append(_df_a_tabla(d_, ss, max_filas=30))
+            mq = contingencia.get("maquinas")
+            if isinstance(mq, pd.DataFrame) and len(mq):
+                mq2 = mq.copy()
+                mq2.columns = [{"celula": "Célula", "horas_antes": "Horas antes", "horas_despues": "Horas después",
+                                "delta": "Δ horas", "franjas_nuevas": "Franjas nuevas"}.get(c, c) for c in mq2.columns]
+                story.append(Paragraph("Máquinas a activar o ampliar", ss["H2k"]))
+                story.append(_df_a_tabla(mq2, ss, max_filas=30))
 
     # ---- KPIs y contribuciones
     story.append(Paragraph("Indicadores clave (KPIs)", ss["H1k"]))
@@ -479,13 +697,13 @@ def generar_informe_pdf(rec, esc, ruta) -> str:
     story.append(_tabla(filas, [ancho * 0.5, ancho * 0.2, ancho * 0.3], ss))
 
     # ---- alternativas
-    story.append(Paragraph("Alternativas (Top 1/2/3) y plan de referencia", ss["H1k"]))
+    story.append(Paragraph("Alternativas (Top 1/2/3) y plan manual de referencia", ss["H1k"]))
     filas = [["Plan", "Estado", "Puntuación", "Idoneidad %", "Células activas (turno actual)", "m² medios", "kWh"]]
     opciones = [(f"Top {i + 1}", p_) for i, p_ in enumerate(rec.top)]
     if es_contingencia:
         opciones.append(("Contingencia", rec.contingencia))
     if rec.baseline is not None:
-        opciones.append(("Referencia manual", rec.baseline))
+        opciones.append(("Plan manual", rec.baseline))
     for nombre, p_ in opciones:
         filas.append([nombre, str(p_.estado), _f(p_.puntuacion, 1), "—" if p_.idoneidad is None else _f(p_.idoneidad, 1),
                       ", ".join(str(int(c)) for c in (p_.config_turno_actual or [])) or "—",
@@ -527,9 +745,16 @@ def generar_informe_pdf(rec, esc, ruta) -> str:
     # ---- anexo
     story.append(PageBreak())
     story.append(Paragraph("Anexo · Supuestos (flags) a revisar", ss["H1k"]))
-    flags = rec.flags or {}
+    from . import config as _cfg
+    flags = rec.flags or _cfg.FLAGS
     filas = [["Id", "Supuesto"]] + [[str(k_), str(v_)] for k_, v_ in flags.items()]
     story.append(_tabla(filas, [1.5 * cm, ancho - 1.5 * cm], ss))
+    sol_i = int(float(esc.parametros.get("solar_ini", 11)))
+    sol_f = int(float(esc.parametros.get("solar_fin", 14)))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(f"<b>Franja solar:</b> {sol_i:02d}:00–{sol_f:02d}:00 (zona amarilla de los gráficos): "
+                           f"energía de red con factor reducido.", ss["Cuerpo"]))
+    story.append(Paragraph("<b>Plan manual de referencia:</b> " + _def_plan_manual(), ss["Cuerpo"]))
 
     doc = SimpleDocTemplate(ruta, pagesize=A4, leftMargin=1.5 * cm, rightMargin=1.5 * cm,
                             topMargin=1.8 * cm, bottomMargin=1.5 * cm,

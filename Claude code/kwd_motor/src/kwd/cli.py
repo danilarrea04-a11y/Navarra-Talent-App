@@ -28,7 +28,10 @@ def _linea_plan(p, hz) -> str:
             f"({k['m2_pico_pct']:.0f} %)\n"
             f"    kWh red {k['kwh_total']:.0f} (bruto {k['kwh_bruto']:.0f}; solar {k['kwh_solar_pct']:.0f} %; "
             f"noche {k['kwh_noche']:.0f})  demanda cubierta {k['demanda_cubierta_pct']:.0f} %  "
-            f"horas-célula {k['horas_celula']:.0f}")
+            f"horas-célula {k['horas_celula']:.0f}\n"
+            f"    camiones/día {k['camiones_dia']:.0f} (máx {k['camiones_por_ciclo_max']}/ciclo)  desperdicio personal "
+            f"{k['desperdicio_personal_h']:.1f} h  horas libres plantilla {k['horas_libres_total']}  "
+            f"excedente {k['excedente_total']}  consumos de SS {k.get('ss_consumos', 0)}")
 
 
 def imprimir(rec: Recomendacion) -> None:

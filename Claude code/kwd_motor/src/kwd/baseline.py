@@ -12,9 +12,10 @@ from .plan import Plan
 HORIZONTE_MIRADA = 8  # horas de previsión de la regla manual
 
 
-def plan_referencia(esc, hz: Horizonte) -> Plan:
-    """Heurística: cada hora laborable activa (u=1) las células cuya pieza quedaría por debajo del
-    colchón (1+k)·SS dentro de 8 h, en orden de célula, mientras los recursos lo permitan."""
+def plan_referencia(esc, hz: Horizonte, previo=None) -> Plan:
+    """Heurística (ver `config.DEFINICION_PLAN_MANUAL`): cada hora laborable activa (u=1) las células cuya pieza
+    quedaría por debajo del colchón (1+k)·SS dentro de 8 h, en orden de célula, mientras haya personal.
+    Se evalúa con personal entero (techo de la carga por hora y rol)."""
     d = preparar(esc, hz)
     H, todas, prods = d.H, d.todas, d.prods
     a = np.zeros((H, len(todas)))
@@ -57,6 +58,6 @@ def plan_referencia(esc, hz: Horizonte) -> Plan:
 
     ix = hz.slots.index
     plan = evaluar(esc, hz, pd.DataFrame(a, index=ix, columns=todas), pd.DataFrame(u, index=ix, columns=todas),
-                   estado="REFERENCIA")
+                   estado="REFERENCIA", previo=previo)
     plan.nombre = "Plan de referencia (manual)"
     return plan

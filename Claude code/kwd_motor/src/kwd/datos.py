@@ -1,4 +1,4 @@
-﻿"""Datos de entrada: escenario, lectura/escritura del Excel y plantilla de ejemplo."""
+"""Datos de entrada: escenario, lectura/escritura del Excel y plantilla de ejemplo (v2)."""
 from __future__ import annotations
 
 import copy
@@ -7,20 +7,20 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import (CELULA_LOGISTICA, HOJAS_COLUMNAS, PARAMETROS_DEFECTO, RECURSOS,
-                     DIAS_LABORABLES)
+from .config import (CELULA_LOGISTICA, CODIGO_ROL, DIAS_LABORABLES, HOJAS_COLUMNAS, PARAMETROS_DEFECTO,
+                     RECURSOS, TURNOS)
 
-# Hojas opcionales y columnas de fecha/hora de cada hoja.
+# Columnas de fecha/hora de cada hoja.
 _COLS_FECHA = {
     "DemandaSemanal": ["semana_inicio"],
     "CorreccionDiaria": ["fecha"],
-    "Disponibilidad": ["desde", "hasta"],
-    "Mantenimientos": ["fecha"],
-    "RecursosReales": ["fecha"],
+    "Bajas": ["fecha"],
+    "BajasTrabajadores": ["fecha"],
+    "Paradas": ["desde", "hasta"],
     "Expediciones": ["fecha_hora"],
 }
 
-# Tabla de células de ttablas.xlsx (hoja "Células"). FLAG F1/F2: una pieza por ciclo y por conjunto.
+# Tabla de células de ttablas.xlsx (hoja "Células"). FLAG F1/F2: una pieza exclusiva por célula, un ciclo = 1 pieza.
 # columnas: celula, tipo, ciclo_s, piezas_m2, operarios, picking, carretilleros, mto, calidad, kw
 _CELULAS_BASE = [
     (1, "COMB", 50, 36, 1, 0.3, 0.4, 0.35, 0.15, 22),
@@ -41,8 +41,7 @@ _CELULAS_BASE = [
     (16, "COMB", 30, 168, 2, 0, 0.4, 0.9, 0.3, 25),
 ]
 
-
-FACTOR_STOCK_DEMO = 1.8  # FLAG F19
+FACTOR_STOCK_DEMO = 2.0 # FLAG F19
 
 
 @dataclass
@@ -55,11 +54,16 @@ class Escenario:
     demanda_semanal: pd.DataFrame
     correccion_diaria: pd.DataFrame
     stock_actual: pd.DataFrame
-    disponibilidad: pd.DataFrame
-    mantenimientos: pd.DataFrame
-    recursos_reales: pd.DataFrame
+    bajas: pd.DataFrame
+    paradas: pd.DataFrame
     expediciones: pd.DataFrame
     descripciones: dict = field(default_factory=dict)
+    bajas_trabajadores: pd.DataFrame = None  # (fecha, trabajador): trabajadores concretos de baja (A7-bis)
+    avisos: list = field(default_factory=list)  # avisos de lectura/eventos (p. ej. parada de la célula 10 ignorada)
+
+    def __post_init__(self):
+        if self.bajas_trabajadores is None:
+            self.bajas_trabajadores = _vacia("BajasTrabajadores")
 
     def copiar(self) -> "Escenario":
         """Copia profunda del escenario (para aplicar eventos sin tocar el original)."""
@@ -88,7 +92,7 @@ def _normalizar_hoja(hoja: str, df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     for c in cols:
         if c not in df.columns:
-            df[c] = pd.NA if c != "piezas_por_conjunto" else 1
+            df[c] = pd.NA
     df = df[cols].dropna(how="all").reset_index(drop=True)
     for c in _COLS_FECHA.get(hoja, []):
         df[c] = pd.to_datetime(df[c])
@@ -98,11 +102,11 @@ def _normalizar_hoja(hoja: str, df: pd.DataFrame) -> pd.DataFrame:
 
 
 def tabla_celulas(esc: Escenario) -> pd.DataFrame:
-    """Tabla de células indexada por número con columnas auxiliares (`es_ve`, `cap_h`)."""
+    """Tabla de células indexada por número con columnas auxiliares (`es_ve`, `cap_h`, `ppc`=1)."""
     t = esc.celulas.set_index("celula").copy()
     t.index = t.index.astype(int)
     t["es_ve"] = t["tipo"].astype(str).str.upper().eq("VE")
-    t["ppc"] = t["piezas_por_conjunto"].fillna(1).astype(float)  # FLAG F2
+    t["ppc"] = 1.0  # FLAG F2: un ciclo = 1 pieza; sin ensamblaje (se mantiene la columna por compatibilidad)
     t["cap_h"] = 3600.0 / t["ciclo_s"].astype(float)  # FLAG F8: OEE 100 %
     return t
 
@@ -129,8 +133,17 @@ def stock_inicial(esc: Escenario) -> dict:
     return base
 
 
+def demanda_desde_coches(coches_dia: float, ratio_comb_ve: float = 2.0) -> tuple[float, float]:
+    """Piezas por referencia y día (VE, COMB) a partir de coches/día y la proporción COMB:VE.
+
+    Ej.: 1.500 coches/día con doble de combustión -> (500 VE, 1.000 COMB) de cada pieza.
+    """
+    ve = float(coches_dia) / (1.0 + float(ratio_comb_ve))
+    return ve, float(coches_dia) - ve
+
+
 def demanda_dia(esc: Escenario, fecha) -> tuple[float, float]:
-    """Demanda diaria (chasis VE, chasis COMB) del día `fecha`.
+    """Demanda diaria (piezas de cada referencia VE, piezas de cada referencia COMB) del día `fecha`.
 
     Prioridad: corrección diaria; si no, demanda semanal / 5 en día laborable (F4).
     """
@@ -140,7 +153,7 @@ def demanda_dia(esc: Escenario, fecha) -> tuple[float, float]:
         m = corr[corr["fecha"] == fecha]
         if len(m):
             f = m.iloc[-1]
-            return float(f["chasis_ve"] or 0), float(f["chasis_comb"] or 0)
+            return _num(f["piezas_ve"]), _num(f["piezas_comb"])
     if fecha.weekday() not in DIAS_LABORABLES:
         return 0.0, 0.0
     dem = esc.demanda_semanal
@@ -153,26 +166,117 @@ def demanda_dia(esc: Escenario, fecha) -> tuple[float, float]:
         previas = dem[dem["semana_inicio"] <= lunes].sort_values("semana_inicio")
         m = previas.tail(1) if len(previas) else dem.sort_values("semana_inicio").head(1)
     f = m.iloc[-1]
-    return float(f["chasis_ve"]) / 5.0, float(f["chasis_comb"]) / 5.0
+    return _num(f["piezas_ve"]) / 5.0, _num(f["piezas_comb"]) / 5.0
+
+
+def _num(v) -> float:
+    return 0.0 if pd.isna(v) else float(v)
+
+
+# --- bajas y trabajadores ---------------------------------------------------------------------
+def n_bajas(esc: Escenario, fecha_turno, turno: str, rol: str):
+    """Bajas registradas del rol en ese turno (None si no hay fila o el valor está vacío)."""
+    b = esc.bajas
+    if not len(b):
+        return None
+    m = b[(b["fecha"] == pd.Timestamp(fecha_turno).normalize()) & (b["turno"] == turno)]
+    if not len(m):
+        return None
+    v = m.iloc[-1][rol]
+    return None if pd.isna(v) else float(v)
+
+
+def redondeo_comercial(x: float) -> int:
+    """Redondeo 'half up' (FLAG F17), no el bancario de Python."""
+    import math
+    return int(math.floor(x + 0.5))
+
+
+def bajas_efectivas(esc: Escenario, fecha_turno, turno: str, rol: str) -> float:
+    """Nº de personas de baja del rol en el turno: valor de la hoja Bajas o, si falta, round(estándar x absentismo)."""
+    v = n_bajas(esc, fecha_turno, turno, rol)
+    if v is not None:
+        return v
+    base = esc.disp_estandar(rol, turno)
+    return float(redondeo_comercial(base * float(esc.parametros["absentismo"])))  # FLAG F7
+
+
+def disp_base(esc: Escenario, fecha_turno, turno: str, rol: str) -> float:
+    """Personas disponibles del rol en el turno (estándar - bajas), antes de restar técnicos en paradas."""
+    return max(0.0, esc.disp_estandar(rol, turno) - bajas_efectivas(esc, fecha_turno, turno, rol))
+
+
+def codigo_trabajador(turno: str, rol: str, i: int) -> str:
+    """Identificador estable de trabajador: turno-rol-número, p. ej. 'M-OP01', 'T-CA02'."""
+    return f"{turno}-{CODIGO_ROL[rol]}{i:02d}"
+
+
+def trabajadores_disponibles(esc: Escenario, fecha_turno, turno: str, rol: str) -> list[str]:
+    """Ids de los trabajadores disponibles del rol en el turno (en orden).
+
+    Parte de 1..estándar, quita los dados de baja por id (hoja BajasTrabajadores) y, si hay más bajas
+    que las nominales, quita los de numeración más alta.
+    """
+    std = int(round(esc.disp_estandar(rol, turno)))
+    n = int(round(disp_base(esc, fecha_turno, turno, rol)))
+    ids = [codigo_trabajador(turno, rol, i) for i in range(1, std + 1)]
+    bt = esc.bajas_trabajadores
+    if len(bt):
+        fuera = set(bt.loc[bt["fecha"] == pd.Timestamp(fecha_turno).normalize(), "trabajador"].astype(str))
+        ids = [i for i in ids if i not in fuera]
+    return ids[:n]
+
+
+# --- paradas ----------------------------------------------------------------------------------
+def _limites_turno(fecha, turno: str):
+    fecha = pd.Timestamp(fecha).normalize()
+    if turno == "DIA":
+        return fecha + pd.Timedelta(hours=6), fecha + pd.Timedelta(hours=30)
+    ini, fin = TURNOS[turno]
+    desde = fecha + pd.Timedelta(hours=ini)
+    hasta = fecha + pd.Timedelta(hours=fin if fin > ini else fin + 24)
+    return desde, hasta
+
+
+def _normalizar_paradas(df: pd.DataFrame, avisos: list) -> pd.DataFrame:
+    df = _normalizar_hoja("Paradas", df)
+    if not len(df):
+        return df
+    df["celula"] = pd.to_numeric(df["celula"]).astype(int)
+    df["tipo"] = (df["tipo"].astype(str).str.strip().str.upper().str.replace("Í", "I", regex=False)
+                  .replace({"NAN": "AVERIA", "<NA>": "AVERIA", "": "AVERIA", "BAJA": "AVERIA",
+                            "MANTENIMIENTO": "PROGRAMADA"}))
+    df["tecnicos"] = pd.to_numeric(df["tecnicos"], errors="coerce").fillna(0.0)
+    es10 = df["celula"] == CELULA_LOGISTICA
+    if es10.any():  # FLAG F22
+        avisos.append("Se ignora la parada/baja de la célula 10: el servicio logístico no puede pararse.")
+        df = df[~es10].reset_index(drop=True)
+    return df
 
 
 # --- lectura / escritura ----------------------------------------------------------------------
 def cargar_entrada(path) -> Escenario:
-    """Lee el Excel de entrada. Las hojas opcionales ausentes o vacías se tratan como tablas vacías."""
+    """Lee el Excel de entrada. Las hojas opcionales ausentes o vacías se tratan como tablas vacías.
+
+    Compatibilidad con v1: `chasis_*` -> `piezas_*`; `Disponibilidad`/`Mantenimientos` -> `Paradas`;
+    `RecursosReales` -> `Bajas`; `piezas_por_conjunto` se ignora.
+    """
     path = Path(path)
     hojas = pd.read_excel(path, sheet_name=None)
     hojas = {k.strip(): v for k, v in hojas.items()}
+    avisos: list[str] = []
 
-    def hoja(nombre):
-        df = hojas.get(nombre)
+    def hoja(nombre, df=None):
+        df = hojas.get(nombre) if df is None else df
         if df is None:
             return _vacia(nombre)
+        if nombre in ("DemandaSemanal", "CorreccionDiaria", "Expediciones"):
+            df = df.rename(columns={"chasis_ve": "piezas_ve", "chasis_comb": "piezas_comb"})
         return _normalizar_hoja(nombre, df)
 
     celulas = hoja("Celulas")
     if celulas.empty:
         raise ValueError("La hoja 'Celulas' es obligatoria y está vacía o no existe.")
-    celulas["piezas_por_conjunto"] = celulas["piezas_por_conjunto"].fillna(1)
     for c in HOJAS_COLUMNAS["Celulas"][2:]:
         celulas[c] = pd.to_numeric(celulas[c]).astype(float)
     celulas["celula"] = celulas["celula"].astype(int)
@@ -188,22 +292,64 @@ def cargar_entrada(path) -> Escenario:
             params[str(f["parametro"]).strip()] = float(f["valor"])
             if pd.notna(f["descripcion"]):
                 descr[str(f["parametro"]).strip()] = str(f["descripcion"])
+    params.pop("camiones_dia", None)  # obsoleto (v1): ahora son 16 ciclos con los camiones que hagan falta
 
     stock = hoja("StockActual")
     for c in ("celula", "piezas"):
         stock[c] = pd.to_numeric(stock[c])
-    disp = hoja("Disponibilidad")
-    mant = hoja("Mantenimientos")
-    mant["turno"] = mant["turno"].astype(str).str.strip().str.upper()
-    rr = hoja("RecursosReales")
-    rr["turno"] = rr["turno"].astype(str).str.strip().str.upper()
 
-    return Escenario(
+    # Bajas (con compatibilidad RecursosReales)
+    bajas = hoja("Bajas")
+    if bajas.empty and "RecursosReales" in hojas:
+        rr = _normalizar_hoja("Bajas", hojas["RecursosReales"].rename(columns={}))
+        rows = []
+        for _, f in rr.iterrows():
+            t = str(f["turno"]).strip().upper()
+            fila = {"fecha": f["fecha"], "turno": t}
+            for r in RECURSOS:
+                v = f[r]
+                fila[r] = pd.NA if pd.isna(v) else max(0.0, esc_std(turnos, r, t) - float(v))
+            rows.append(fila)
+        bajas = pd.DataFrame(rows, columns=HOJAS_COLUMNAS["Bajas"])
+    bajas["turno"] = bajas["turno"].astype(str).str.strip().str.upper()
+    for r in RECURSOS:
+        bajas[r] = pd.to_numeric(bajas[r], errors="coerce")
+
+    # Paradas (con compatibilidad Disponibilidad y Mantenimientos)
+    paradas = hoja("Paradas")
+    if paradas.empty:
+        filas = []
+        if "Disponibilidad" in hojas:
+            for _, f in hojas["Disponibilidad"].dropna(how="all").iterrows():
+                if pd.notna(f.get("celula")):
+                    filas.append({"celula": int(f["celula"]), "desde": pd.to_datetime(f.get("desde")),
+                                  "hasta": pd.to_datetime(f.get("hasta")), "tipo": "AVERIA", "tecnicos": 0})
+        if "Mantenimientos" in hojas:
+            for _, f in hojas["Mantenimientos"].dropna(how="all").iterrows():
+                if pd.notna(f.get("celula")) and pd.notna(f.get("fecha")):
+                    d, h = _limites_turno(f["fecha"], str(f["turno"]).strip().upper())
+                    filas.append({"celula": int(f["celula"]), "desde": d, "hasta": h, "tipo": "PROGRAMADA",
+                                  "tecnicos": float(f["tecnicos"]) if pd.notna(f.get("tecnicos")) else 0.0})
+        paradas = pd.DataFrame(filas, columns=HOJAS_COLUMNAS["Paradas"])
+    paradas = _normalizar_paradas(paradas, avisos)
+
+    bt = hoja("BajasTrabajadores")
+    esc = Escenario(
         celulas=celulas, turnos=turnos, almacen=almacen, parametros=params,
         demanda_semanal=hoja("DemandaSemanal"), correccion_diaria=hoja("CorreccionDiaria"),
-        stock_actual=stock, disponibilidad=disp, mantenimientos=mant, recursos_reales=rr,
-        expediciones=hoja("Expediciones"), descripciones=descr,
+        stock_actual=stock, bajas=bajas, paradas=paradas, expediciones=hoja("Expediciones"),
+        descripciones=descr, bajas_trabajadores=bt, avisos=avisos,
     )
+    for hh in ("demanda_semanal", "correccion_diaria", "expediciones"):
+        df = getattr(esc, hh)
+        for c in ("piezas_ve", "piezas_comb"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return esc
+
+
+def esc_std(turnos: pd.DataFrame, rol: str, turno: str) -> float:
+    fila = turnos[turnos["recurso"] == rol]
+    return float(fila[turno].iloc[0]) if len(fila) and turno in fila.columns else 0.0
 
 
 def guardar_entrada(esc: Escenario, path) -> None:
@@ -218,9 +364,8 @@ def guardar_entrada(esc: Escenario, path) -> None:
     hojas = {
         "Celulas": esc.celulas, "Turnos": esc.turnos, "Almacen": esc.almacen, "Parametros": pdf,
         "DemandaSemanal": esc.demanda_semanal, "CorreccionDiaria": esc.correccion_diaria,
-        "StockActual": esc.stock_actual, "Disponibilidad": esc.disponibilidad,
-        "Mantenimientos": esc.mantenimientos, "RecursosReales": esc.recursos_reales,
-        "Expediciones": esc.expediciones,
+        "StockActual": esc.stock_actual, "Bajas": esc.bajas, "BajasTrabajadores": esc.bajas_trabajadores,
+        "Paradas": esc.paradas, "Expediciones": esc.expediciones,
     }
     with pd.ExcelWriter(path, engine="openpyxl") as w:
         for nombre, df in hojas.items():
@@ -228,9 +373,12 @@ def guardar_entrada(esc: Escenario, path) -> None:
 
 
 def crear_escenario_ejemplo() -> Escenario:
-    """Escenario de demostración (spec §1): semana del 28/09/2026, corrección el 02/10."""
-    celulas = pd.DataFrame(_CELULAS_BASE, columns=HOJAS_COLUMNAS["Celulas"][:-1])
-    celulas["piezas_por_conjunto"] = 1  # FLAG F2
+    """Escenario de demostración (A11): semana del 28/09/2026, 1.500 coches/día (2 COMB : 1 VE).
+
+    Demanda por pieza: 500 VE / 1.000 COMB al día (semanal 2.500 / 5.000); corrección el 02/10: 520 / 980.
+    Parada programada de la célula 13 el 02/10 turno T (2 técnicos) y una baja de operario ese turno.
+    """
+    celulas = pd.DataFrame(_CELULAS_BASE, columns=HOJAS_COLUMNAS["Celulas"])
     celulas["celula"] = celulas["celula"].astype(int)
     for c in HOJAS_COLUMNAS["Celulas"][2:]:
         celulas[c] = celulas[c].astype(float)
@@ -241,36 +389,35 @@ def crear_escenario_ejemplo() -> Escenario:
                             "m2": [400, 100, 800]})
     params = {k: v for k, (v, _) in PARAMETROS_DEFECTO.items()}
     descr = {k: d for k, (_, d) in PARAMETROS_DEFECTO.items()}
+    ve, comb = demanda_desde_coches(1500, 2.0)
     esc = Escenario(
         celulas=celulas, turnos=turnos, almacen=almacen, parametros=params,
         demanda_semanal=pd.DataFrame({"semana_inicio": [pd.Timestamp("2026-09-28")],
-                                      "chasis_ve": [2400], "chasis_comb": [1600]}),
+                                      "piezas_ve": [ve * 5], "piezas_comb": [comb * 5]}),
         correccion_diaria=pd.DataFrame({"fecha": [pd.Timestamp("2026-10-02")],
-                                        "chasis_ve": [520], "chasis_comb": [300]}),
+                                        "piezas_ve": [520.0], "piezas_comb": [980.0]}),
         stock_actual=_vacia("StockActual"),
-        disponibilidad=_vacia("Disponibilidad"),
-        mantenimientos=pd.DataFrame({"fecha": [pd.Timestamp("2026-10-02")], "turno": ["T"],
-                                     "celula": [13], "tecnicos": [2]}),
-        recursos_reales=pd.DataFrame({"fecha": [pd.Timestamp("2026-10-02")], "turno": ["T"],
-                                      "operarios": [15], "picking": [pd.NA], "carretilleros": [pd.NA],
-                                      "mto": [pd.NA], "calidad": [pd.NA]}),
+        bajas=pd.DataFrame({"fecha": [pd.Timestamp("2026-10-02")], "turno": ["T"], "operarios": [1.0],
+                            "picking": [0.0], "carretilleros": [0.0], "mto": [0.0], "calidad": [0.0]}),
+        paradas=pd.DataFrame({"celula": [13], "desde": [pd.Timestamp("2026-10-02 14:00")],
+                              "hasta": [pd.Timestamp("2026-10-02 22:00")], "tipo": ["PROGRAMADA"],
+                              "tecnicos": [2.0]}),
         expediciones=_vacia("Expediciones"),
         descripciones=descr,
     )
     ss = ss_por_celula(esc)
-    # Stock inicial de la demo = round(FACTOR x SS) por pieza. FLAG F19: la especificación v1 decía 1,3 x SS,
-    # pero con 1,3 el escenario es inviable (0,3 x SS no cubre un turno de envíos); se usa 1,8 x SS.
+    # FLAG F19: stock inicial de la demo = round(FACTOR x SS) por pieza (rango admitido 1,3 x - 2 x SS).
     esc.stock_actual = pd.DataFrame({"celula": list(ss.keys()),
-                                     "piezas": [round(FACTOR_STOCK_DEMO * v) for v in ss.values()]})
+                                     "piezas": [float(round(FACTOR_STOCK_DEMO * v)) for v in ss.values()]})
     return esc
 
 
 def crear_escenario_contingencia() -> Escenario:
-    """Demo + célula 14 de baja del 02/10 06:00 al 03/10 06:00 (produce un plan INVIABLE de contingencia)."""
+    """Demo + avería de la célula 14 desde el 02/10 10:00 hasta el 03/10 06:00."""
     esc = crear_escenario_ejemplo()
-    esc.disponibilidad = pd.DataFrame({"celula": [14], "estado": ["BAJA"],
-                                       "desde": [pd.Timestamp("2026-10-02 06:00")],
-                                       "hasta": [pd.Timestamp("2026-10-03 06:00")]})
+    nueva = pd.DataFrame({"celula": [14], "desde": [pd.Timestamp("2026-10-02 10:00")],
+                          "hasta": [pd.Timestamp("2026-10-03 06:00")], "tipo": ["AVERIA"], "tecnicos": [0.0]})
+    esc.paradas = pd.concat([esc.paradas, nueva], ignore_index=True)
     return esc
 
 
@@ -292,4 +439,3 @@ def validar_ss_almacen(esc: Escenario) -> float:
     t = tabla_celulas(esc)
     ss = ss_por_celula(esc)
     return float(sum(v / t.loc[c, "piezas_m2"] for c, v in ss.items() if t.loc[c, "piezas_m2"] > 0))
-

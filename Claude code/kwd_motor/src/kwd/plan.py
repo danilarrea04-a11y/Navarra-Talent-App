@@ -17,6 +17,7 @@ class Plan:
       produciendo; `produccion`: piezas; `stock`: piezas al final de cada hora (células productivas).
     - `recursos`: columnas `<recurso>_usado` y `<recurso>_disp`.
     - `energia_kwh`: energía de red por hora (kW x u x factor horario, FLAG F16).
+    - `recursos`: `<recurso>_usado` = personas enteras N; `<recurso>_req` = suma de cargas; `<recurso>_disp`.
     """
     estado: str
     viable: bool
@@ -42,6 +43,11 @@ class Plan:
     tiempo_s: float = 0.0
     objetivo: float = float("nan")
     holguras: dict = field(default_factory=dict)
+    # Personal (v2): N entero por slot y rol; asignación nominal por slot; resumen por trabajador; plantilla P por turno
+    personas: pd.DataFrame = field(default_factory=pd.DataFrame)      # index slot, columnas = roles (N)
+    personal: pd.DataFrame = field(default_factory=pd.DataFrame)      # slot, hora, turno, rol, trabajador, celulas, carga, estado
+    trabajadores: pd.DataFrame = field(default_factory=pd.DataFrame)  # trabajador, turno, rol, horas_asignado, horas_libre, celulas
+    plantilla: pd.DataFrame = field(default_factory=pd.DataFrame)     # fecha_turno, turno, rol, plantilla, disponibles, excedente, horas_libres
 
     def resumen(self) -> str:
         """Línea de texto con lo esencial del plan."""

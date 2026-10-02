@@ -98,15 +98,16 @@ def _explicar(esc: Escenario, hz: Horizonte, plan: Plan, top: list, baseline: Pl
             bloq_futuro = [h for h in hz.bloqueos.get(c, set()) if h > turno_idx[-1]]
             if bloq_futuro:  # producción anticipada por mantenimiento/baja posterior
                 tb = s["turno"].iloc[min(bloq_futuro)]
-                es_mto = len(esc.mantenimientos) > 0 and bool((esc.mantenimientos["celula"] == c).any())
+                pc = esc.paradas[esc.paradas["celula"] == c] if len(esc.paradas) else esc.paradas
+                es_mto = len(pc) > 0 and bool((pc["tipo"] == "PROGRAMADA").any())
                 motivo += (f". Se adelanta producción de la célula {c} por "
-                           f"{'mantenimiento' if es_mto else 'baja'} en turno {tb}")
+                           f"{'mantenimiento' if es_mto else 'avería'} en turno {tb}")
             hs = [h for h in horas if solar.iloc[h]]
             solar_txt = (f"; colocada en franja solar ({len(hs)} de {len(horas)} h)" if hs else
                          "; fuera de franja solar")
             porque.append(f"Célula {c} activa {franjas(hz, horas)}: {motivo}{solar_txt}.")
         elif bloq_turno:
-            porque.append(f"Célula {c} inactiva: BAJA/MANTENIMIENTO en el turno.")
+            porque.append(f"Célula {c} inactiva: PARADA/AVERÍA en el turno.")
         else:
             h1 = _primer_incumplimiento_sin_produccion(d, hz, ic)
             hasta = (f"{s['inicio'].iloc[h1]:%H:%M} ({s['inicio'].iloc[h1]:%d/%m})" if h1 is not None
@@ -118,6 +119,8 @@ def _explicar(esc: Escenario, hz: Horizonte, plan: Plan, top: list, baseline: Pl
         return {"puntuacion": p.puntuacion, "idoneidad": p.idoneidad, "estado": p.estado,
                 "horas_operario": k["operarios_horas"], "horas_picking": k["picking_horas"],
                 "horas_carretillero": k["carretilleros_horas"], "m2_medio": k["m2_medio"],
+                "desperdicio_personal_h": k["desperdicio_personal_h"], "camiones_dia": k["camiones_dia"],
+                "horas_libres_total": k["horas_libres_total"],
                 "m2_pico": k["m2_pico"], "kwh_total": k["kwh_total"], "kwh_bruto": k["kwh_bruto"],
                 "kwh_solar_pct": k["kwh_solar_pct"], "demanda_cubierta_pct": k["demanda_cubierta_pct"]}
 
@@ -163,20 +166,31 @@ def _alertas(esc: Escenario, hz: Horizonte, plan: Plan | None, top: list, contin
         n = int(((u_ >= dp - 1e-9) & (dp > 0) & s["laborable"]).sum())
         if n:
             al.append(f"Recurso {r} al 100 % en {n} hora(s) del horizonte.")
+    for r in RECURSOS:  # A7: personal entero, fracciones sueltas
+        w = plan.kpis.get(f"desperdicio_{r}_h", 0.0)
+        if w > 1e-6:
+            al.append(f"Desperdicio de personal ({r}): {w:.1f} persona-hora(s) de fracción suelta en el horizonte.")
+    if plan.kpis.get("horas_libres_total", 0) > 0:
+        al.append(f"Horas libres dentro de la plantilla: {plan.kpis['horas_libres_total']} persona-hora(s) "
+                  f"(personal del turno sin célula en esa hora).")
     return al
 
 
-def recomendar(esc: Escenario, inicio, horas=None, top_k: int = 3) -> Recomendacion:
-    """Calcula el Top-K de configuraciones viables, el plan de referencia y su explicación."""
+def recomendar(esc: Escenario, inicio, horas=None, top_k: int = 3, previo=None) -> Recomendacion:
+    """Calcula el Top-K de configuraciones viables, el plan de referencia y su explicación.
+
+    `previo`: asignación nominal de personal de la hora anterior (ver `personal.previo_de_plan`) para que los
+    trabajadores mantengan su puesto al reconfigurar.
+    """
     t0 = time.perf_counter()
     hz = construir_horizonte(esc, inicio, horas)
     top: list[Plan] = []
     contingencia: Plan | None = None
     cortes: list = []
-    baseline = plan_referencia(esc, hz)
+    baseline = plan_referencia(esc, hz, previo=previo)
     for j in range(top_k):
         try:
-            plan = resolver(esc, hz, cortes, inicial=baseline.activacion if not cortes else None)
+            plan = resolver(esc, hz, cortes, inicial=baseline.activacion if not cortes else None, previo=previo)
         except ModeloInfactible:
             break
         plan.nombre = f"Top {j + 1}"
