@@ -144,20 +144,23 @@ def test_pedido_no_servido_es_critico_con_aviso():
 
 
 # --- horas libres (R) y stock óptimo (B) ----------------------------------------------------------
-def test_R_es_fraccion_libre_del_personal_presente(rec06):
+def test_R_es_tiempo_muerto_del_personal_presente(rec06):
+    # R = (presentes - trabajo productivo) / presentes; trabajo = carga x fracción de la hora produciendo
     p = rec06.top[0]
     hz = rec06.horizonte
     W = hz.slots["laborable"].to_numpy(dtype=bool)
     disp = sum(p.recursos[f"{r}_disp"].to_numpy()[W].sum() for r in RECURSOS)
+    trabajo = sum(p.recursos[f"{r}_trabajo"].to_numpy()[W].sum() for r in RECURSOS)
     usado = sum(p.recursos[f"{r}_usado"].to_numpy()[W].sum() for r in RECURSOS)
-    assert p.componentes["R"] == pytest.approx((disp - usado) / disp, abs=1e-9)
-    assert p.kpis["horas_libres_total"] == pytest.approx(disp - usado)
+    assert trabajo <= usado + 1e-6  # producir parte de la hora no cuenta como hora completa trabajada
+    assert p.componentes["R"] == pytest.approx((disp - trabajo) / disp, abs=1e-9)
+    assert p.kpis["horas_libres_total"] == pytest.approx(disp - trabajo)
     assert p.kpis["horas_libres_total"] == pytest.approx(sum(p.kpis[f"horas_libres_{r}"] for r in RECURSOS))
     assert "ocupacion_operarios_pct" in p.kpis
     # todo el personal presente está ASIGNADO o LIBRE (sin EXCEDENTE)
     assert "EXCEDENTE" not in set(p.personal["estado"])
     libres = int(((p.personal["estado"] == "LIBRE")).sum())
-    assert libres == pytest.approx(p.kpis["horas_libres_total"])
+    assert libres <= p.kpis["horas_libres_total"] + 1e-6  # el resto del tiempo muerto son fracciones de hora
 
 
 def test_B_desviacion_respecto_al_optimo_en_cierres(rec06, esc06):

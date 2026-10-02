@@ -156,9 +156,16 @@ def _validar_puntuacion(esc, hz, plan, t, celdas, prods, ss, i0, A, W, usado, A_
     N = np.ceil(usado - 1e-6)
     DISP = np.stack([s[f"{r}_disp"].to_numpy(dtype=float) for r in RECURSOS], axis=1)
 
-    # R = fracción libre del personal presente = Σ (Disp - N) / Σ Disp en horas laborables
+    # R = tiempo muerto del personal presente = Σ (Disp - trabajo productivo) / Σ Disp en horas laborables;
+    # trabajo = carga × fracción de la hora produciendo (células no productivas: hora completa si activas)
+    efectivo = A_.copy()
+    for j, c in enumerate(celdas):
+        if c in prods:
+            efectivo[:, j] = U_[:, j]
+    REQ = np.array([[float(t.loc[c, r]) for r in RECURSOS] for c in celdas])
+    trabajo = efectivo @ REQ
     den = float(DISP[W].sum())
-    R = float((DISP[W] - N[W]).sum() / den) if den > 1e-9 else 0.0
+    R = float((DISP[W] - trabajo[W]).sum() / den) if den > 1e-9 else 0.0
 
     S = float(np.mean(esp / A)) if H else 0.0
     # B = media sobre piezas y cierres de turno de |I - óptimo| / óptimo

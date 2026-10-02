@@ -17,7 +17,6 @@ from .plan import Plan
 from .validador import (agotamiento, aviso_direccion, avisos_plan, consumos_ss, desabastecimiento, validar)
 
 PENALIZACION = 1000.0  # holgura del espacio de almacén (> 800 m²): vuelve INVIABLE el plan (el pedido no servido usa penalizacion_pedido)
-USO_MIN = 0.25  # fracción mínima de la hora que produce una célula activa (evita activar sólo para ocupar personal)
 PESO_ARRANQUES = 1e-4  # estabilidad: penalización por arranque
 TOL_HOLGURA = 1e-6
 ESCALA_OBJ = 1000.0  # escala del objetivo (evita costes ~1e-8 por debajo de la tolerancia del solver)
@@ -78,15 +77,28 @@ def preparar(esc: Escenario, hz: Horizonte) -> SimpleNamespace:
     return d
 
 
-def _componentes_RQ(N: np.ndarray, d) -> tuple[float, float]:
-    """(R, Q) a partir de las personas ocupadas N (H x 5).
+def _trabajo(a: np.ndarray, u: np.ndarray, d) -> np.ndarray:
+    """Horas-persona productivas por hora y rol: carga × fracción de la hora produciendo (H x 5).
 
-    R = Σ (Disp - N) / Σ Disp en horas laborables: fracción libre de TODO el personal presente.
+    Las células productivas cuentan su fracción de uso u; las no productivas (célula 10, servicio logístico
+    permanente) cuentan la hora completa mientras están activas.
+    """
+    efectivo = a.astype(float).copy()
+    idx_p = [d.ipos[c] for c in d.prods]
+    efectivo[:, idx_p] = u[:, idx_p]
+    return efectivo @ d.req
+
+
+def _componentes_RQ(N: np.ndarray, d, trabajo: np.ndarray) -> tuple[float, float]:
+    """(R, Q) a partir del trabajo productivo y de las personas ocupadas N (H x 5).
+
+    R = Σ (Disp - trabajo) / Σ Disp en horas laborables: fracción de tiempo muerto de TODO el personal presente,
+    donde trabajo = carga de cada célula × fracción de la hora en que produce (célula 10: hora completa).
     Q = media sobre horas laborables de la ocupación media de mto y calidad (N/disp).
     """
     iw = np.where(d.W)[0]
     den = float(d.disp[iw].sum())
-    R = float((d.disp[iw] - N[iw]).sum() / den) if den > 1e-9 else 0.0
+    R = float((d.disp[iw] - trabajo[iw]).sum() / den) if den > 1e-9 else 0.0
     im, ic = RECURSOS.index("mto"), RECURSOS.index("calidad")
     q = []
     for h in iw:
@@ -129,11 +141,12 @@ def evaluar(esc: Escenario, hz: Horizonte, activacion: pd.DataFrame, uso: pd.Dat
     espacio = (stock / dens_ok[None, :]).sum(axis=1)  # m² de producto terminado
     req = a @ d.req                       # cargas fraccionarias por hora y rol
     N = personas_enteras(req)             # personas ocupadas por hora y rol
+    trabajo = _trabajo(a, u, d)           # horas-persona realmente produciendo por hora y rol
     energia_bruta = (u * d.kw[None, :]).sum(axis=1)
     energia_red = energia_bruta * d.f
 
     # Componentes de la puntuación (menor = mejor)
-    R, Q = _componentes_RQ(N, d)
+    R, Q = _componentes_RQ(N, d, trabajo)
     S = float(np.mean(espacio / d.A)) if H else 0.0
     if len(d.cierres) and len(d.prods):  # B = media de |I - óptimo| / óptimo en los cierres de turno
         B = float(np.mean(np.abs(stock[d.cierres] - d.opt) / np.where(d.opt > 0, d.opt, np.inf)))
@@ -152,6 +165,7 @@ def evaluar(esc: Escenario, hz: Horizonte, activacion: pd.DataFrame, uso: pd.Dat
     for j, r in enumerate(RECURSOS):
         rec[f"{r}_usado"] = N[:, j]
         rec[f"{r}_req"] = req[:, j]
+        rec[f"{r}_trabajo"] = trabajo[:, j]
         rec[f"{r}_disp"] = d.disp[:, j]
     turno_idx = hz.slots_turno_actual()
     config = [c for c in d.todas if cols_a.loc[turno_idx, c].sum() > 0] if turno_idx else []
@@ -243,10 +257,10 @@ def _kpis_tramo(d, hz, plan: Plan, idx: np.ndarray, bruta: np.ndarray) -> dict:
         k[f"{r}_ocup_media_pct"] = float(100 * frac.mean())
         k[f"{r}_ocup_pico_pct"] = float(100 * frac.max())
     k["desperdicio_personal_h"] = float(sum(k[f"desperdicio_{r}_h"] for r in RECURSOS))
-    # horas libres = Σ (presentes - ocupados) en horas laborables (KPI principal)
+    # horas libres (tiempo muerto) = Σ (presentes - trabajo productivo) en horas laborables (KPI principal)
     for r in RECURSOS:
         dp = rec[f"{r}_disp"].to_numpy()[idx][W]
-        un = rec[f"{r}_usado"].to_numpy()[idx][W]
+        un = rec[f"{r}_trabajo"].to_numpy()[idx][W]
         k[f"horas_libres_{r}"] = float((dp - un).sum())
         k[f"ocupacion_{r}_pct"] = float(100 * un.sum() / dp.sum()) if dp.sum() > 1e-9 else 0.0
     k["horas_libres_total"] = float(sum(k[f"horas_libres_{r}"] for r in RECURSOS))
@@ -394,7 +408,6 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
     for c in prods:
         for h in range(H):
             prob += u[c, h] <= a[c, h], f"r1_{c}_{h}"
-            prob += u[c, h] >= USO_MIN * a[c, h], f"r1m_{c}_{h}"  # una célula activa produce al menos USO_MIN de la hora
     par = [c for c in CELULAS_PAREJA if c in todas]
     if len(par) == 2:  # regla 3
         for h in range(H):
@@ -442,11 +455,13 @@ def _resolver_uno(esc: Escenario, hz: Horizonte, cortes, tl: float, inicial, pre
     # --- objetivo ---
     im, ic_ = RECURSOS.index("mto"), RECURSOS.index("calidad")
     den_r = float(d.disp[iw].sum()) if len(iw) else 0.0
-    # R = fracción libre del personal presente = (ΣDisp - ΣN) / ΣDisp (N = carga en la fase relajada)
+    # R = tiempo muerto del personal presente = (ΣDisp - Σ trabajo productivo) / ΣDisp. El trabajo cuenta la
+    # fracción de la hora que cada célula produce (u), así que activar una célula sin producir no reduce R.
     if den_r > 1e-9:
-        usado = (pulp.lpSum(Nv[j, h] for h in iw for j in range(len(RECURSOS))) if entero else
-                 pulp.lpSum(carga[j, h] for h in iw for j in range(len(RECURSOS))))
-        expr_R = 1.0 - usado * (1.0 / den_r)
+        prods_set = set(prods)
+        trabajo = pulp.lpSum(d.req[d.ipos[c], j] * (u[c, h] if c in prods_set else a[c, h])
+                             for c in todas for h in iw for j in range(len(RECURSOS)) if d.req[d.ipos[c], j] > 0)
+        expr_R = 1.0 - trabajo * (1.0 / den_r)
     else:
         expr_R = 0
     terminos_q = []
